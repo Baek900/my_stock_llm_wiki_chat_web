@@ -31,7 +31,7 @@
 flowchart TD
     User([사용자 입력 / 질문]) --> Backend[FastAPI Backend - main.py]
     
-    subgraph [에이전트 리서치 루프 (agent_harness.py)]
+    subgraph "에이전트 리서치 루프 (agent_harness.py)"
         Backend --> Intent{의도 분류}
         Intent -->|일반 대화| GenChat[단순 대화 응답 스트리밍]
         Intent -->|심층 리서치| Planner[다단계 지식 탐색 계획 수립]
