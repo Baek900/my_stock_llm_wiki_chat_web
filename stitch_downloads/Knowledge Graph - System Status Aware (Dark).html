@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Aethelgard Wiki | Cognitive Nexus</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&amp;family=JetBrains+Mono:wght@450;500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "secondary-container": "#00c1fd",
+                        "tertiary-container": "#a377ff",
+                        "on-tertiary-fixed": "#24005a",
+                        "surface-variant": "#353437",
+                        "on-secondary": "#003548",
+                        "surface-container-high": "#2a2a2c",
+                        "primary-container": "#638aff",
+                        "inverse-surface": "#e5e1e4",
+                        "surface": "#131315",
+                        "inverse-on-surface": "#303032",
+                        "on-secondary-fixed": "#001e2b",
+                        "secondary-fixed": "#c2e8ff",
+                        "on-surface": "#e5e1e4",
+                        "on-error": "#690005",
+                        "surface-container": "#201f21",
+                        "outline": "#8d90a0",
+                        "secondary": "#8fd8ff",
+                        "background": "#131315",
+                        "surface-bright": "#39393b",
+                        "on-primary": "#00297a",
+                        "on-secondary-fixed-variant": "#004d67",
+                        "on-background": "#e5e1e4",
+                        "error": "#ffb4ab",
+                        "primary-fixed": "#dbe1ff",
+                        "surface-container-highest": "#353437",
+                        "secondary-fixed-dim": "#75d1ff",
+                        "on-tertiary": "#3e008f",
+                        "primary-fixed-dim": "#b5c4ff",
+                        "on-primary-fixed": "#00174c",
+                        "tertiary-fixed": "#eaddff",
+                        "surface-tint": "#b5c4ff",
+                        "on-surface-variant": "#c3c5d7",
+                        "tertiary-fixed-dim": "#d2bcff",
+                        "primary": "#b5c4ff",
+                        "inverse-primary": "#1653d6",
+                        "surface-dim": "#131315",
+                        "outline-variant": "#434654",
+                        "on-tertiary-fixed-variant": "#5900c7",
+                        "tertiary": "#d2bcff",
+                        "on-tertiary-container": "#36007e",
+                        "on-primary-fixed-variant": "#003dab",
+                        "surface-container-lowest": "#0e0e10",
+                        "surface-container-low": "#1b1b1d",
+                        "on-primary-container": "#00236b",
+                        "error-container": "#93000a",
+                        "on-secondary-container": "#004b65",
+                        "on-error-container": "#ffdad6"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "sm": "8px",
+                        "base": "4px",
+                        "margin-mobile": "16px",
+                        "md": "16px",
+                        "lg": "24px",
+                        "gutter": "24px",
+                        "xs": "4px",
+                        "xl": "32px",
+                        "margin-desktop": "48px"
+                    },
+                    "fontFamily": {
+                        "headline-lg": ["Inter"],
+                        "body-lg": ["Inter"],
+                        "label-md": ["Inter"],
+                        "body-md": ["Inter"],
+                        "title-lg": ["Inter"],
+                        "headline-lg-mobile": ["Inter"],
+                        "display-lg": ["Inter"]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        @keyframes pulse-line {
+            0% { stroke-dashoffset: 100; opacity: 0.3; }
+            50% { opacity: 0.7; }
+            100% { stroke-dashoffset: 0; opacity: 0.3; }
+        }
+        @keyframes float {
+            0% { transform: translateY(0px); }
+            50% { transform: translateY(-8px); }
+            100% { transform: translateY(0px); }
+        }
+        @keyframes amber-pulse {
+            0% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.4); opacity: 0.4; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .animate-pulse-line {
+            stroke-dasharray: 10;
+            animation: pulse-line 3s linear infinite;
+        }
+        .glass {
+            background: rgba(32, 31, 33, 0.7);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+        }
+        .node-glow-blue { filter: drop-shadow(0 0 8px rgba(181, 196, 255, 0.4)); }
+        .node-glow-purple { filter: drop-shadow(0 0 8px rgba(210, 188, 255, 0.4)); }
+        .floating-chat {
+            animation: float 4s ease-in-out infinite;
+        }
+        .animate-amber-pulse {
+            animation: amber-pulse 2s infinite ease-in-out;
+        }
+        body { font-family: 'Inter', sans-serif; }
+        #source-detail-panel, #document-detail-panel {
+            transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease;
+        }
+        .custom-tooltip:hover .tooltip-content {
+            opacity: 1;
+            visibility: visible;
+            transform: translateY(0);
+        }
+    </style>
+</head>
+<body class="bg-background text-on-background overflow-hidden">
+<!-- Sidebar Navigation -->
+<aside class="fixed left-0 top-0 h-full flex flex-col z-40 bg-surface-container-lowest border-r border-outline-variant w-[280px]">
+<div class="px-6 py-6 border-b border-outline-variant flex items-center justify-between">
+<h1 class="text-xl font-bold text-primary flex items-center gap-2">
+<span class="material-symbols-outlined" data-icon="hub">hub</span>
+            Nexus Wiki
+        </h1>
+<div class="flex gap-2">
+<span class="material-symbols-outlined text-outline cursor-pointer hover:text-primary" data-icon="search">search</span>
+</div>
+</div>
+<div class="flex-1 overflow-y-auto py-2">
+<div class="px-4 py-2">
+<button class="w-full flex items-center justify-between py-2 text-on-surface font-semibold text-sm">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-sm" data-icon="keyboard_arrow_down">keyboard_arrow_down</span>
+<span>Overview</span>
+</div>
+</button>
+<div class="pl-6 py-1 text-on-surface-variant text-sm hover:text-primary cursor-pointer">Project Roadmap</div>
+</div>
+<div class="px-4 py-2">
+<button class="w-full flex items-center justify-between py-2 text-on-surface font-semibold text-sm">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-sm" data-icon="keyboard_arrow_down">keyboard_arrow_down</span>
+<span>Knowledge Assets</span>
+</div>
+<span class="text-outline text-xs bg-surface-container-high px-1.5 rounded">37</span>
+</button>
+<div class="pl-6 space-y-2 mt-1">
+<div class="text-sm text-on-surface-variant hover:text-primary cursor-pointer truncate">Neural Plasticity</div>
+<div class="text-sm text-on-surface-variant hover:text-primary cursor-pointer truncate">Synaptic Weighting</div>
+<div class="text-sm font-bold text-primary cursor-pointer truncate">Dopamine Feedback</div>
+<div class="text-sm text-on-surface-variant hover:text-primary cursor-pointer truncate">LTP Mechanisms</div>
+<div class="text-sm text-on-surface-variant hover:text-primary cursor-pointer truncate">Axonal Growth</div>
+</div>
+</div>
+</div>
+<!-- System Health Section -->
+<div class="px-6 py-4 border-t border-outline-variant bg-surface-container-low">
+<h3 class="text-[10px] font-bold text-outline uppercase tracking-widest mb-3">System Health</h3>
+<div class="flex items-center justify-between bg-surface-container p-2 rounded-lg border border-outline-variant/30">
+<div class="flex items-center gap-2">
+<div class="relative flex h-2 w-2">
+<span class="animate-amber-pulse absolute inline-flex h-full w-full rounded-full bg-amber-500 opacity-75"></span>
+<span class="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+</div>
+<span class="text-xs font-medium text-on-surface">Local LLM</span>
+</div>
+<span class="text-[10px] font-bold text-amber-500 bg-amber-500/10 px-2 py-0.5 rounded">BUSY</span>
+</div>
+</div>
+<div class="p-4 border-t border-outline-variant bg-surface-container-lowest">
+<div class="flex items-center gap-3">
+<div class="w-8 h-8 rounded-full bg-primary-container flex items-center justify-center text-on-primary-container text-xs font-bold">QN</div>
+<div class="flex-1 overflow-hidden">
+<p class="text-xs font-bold truncate text-on-surface">Quantum Researcher</p>
+<p class="text-[10px] text-outline">Session: 0x4f...92</p>
+</div>
+</div>
+</div>
+</aside>
+<!-- Top App Bar -->
+<header class="fixed top-0 right-0 w-[calc(100%-280px)] h-16 flex items-center justify-between px-lg z-30 bg-surface/80 backdrop-blur-md border-b border-outline-variant/30">
+<div class="flex items-center gap-4">
+<div class="flex items-center gap-2 text-on-surface">
+<span class="material-symbols-outlined text-primary" data-icon="account_tree">account_tree</span>
+<span class="font-semibold text-lg">Active Workspace</span>
+</div>
+<div class="h-4 w-[1px] bg-outline-variant mx-2"></div>
+<div class="flex gap-4 text-xs font-bold text-outline uppercase tracking-wider">
+<span class="hover:text-primary cursor-pointer transition-colors">70 Entities</span>
+<span class="hover:text-primary cursor-pointer transition-colors">154 Links</span>
+</div>
+</div>
+<div class="flex items-center gap-4">
+<!-- Resources Badge with Tooltip -->
+<div class="relative custom-tooltip">
+<div class="flex items-center gap-1.5 bg-tertiary-container/20 text-tertiary border border-tertiary/30 px-3 py-1.5 rounded-full cursor-help">
+<span class="material-symbols-outlined text-sm" data-icon="memory">memory</span>
+<span class="text-[11px] font-bold uppercase tracking-wider">Resources</span>
+<span class="w-1.5 h-1.5 bg-amber-500 rounded-full"></span>
+</div>
+<div class="tooltip-content absolute top-full right-0 mt-2 w-64 p-3 bg-surface-container-highest text-on-surface text-xs rounded-xl shadow-2xl border border-outline-variant opacity-0 invisible translate-y-1 transition-all duration-200 z-50">
+<div class="flex items-start gap-2">
+<span class="material-symbols-outlined text-amber-500 text-sm" data-icon="warning">warning</span>
+<p>Model is currently processing a background task. Next request will be queued.</p>
+</div>
+</div>
+</div>
+<button class="bg-primary text-on-primary px-6 py-2 rounded-full font-bold text-sm hover:opacity-90 active:scale-95 transition-all shadow-lg shadow-primary/20">
+            Sync
+        </button>
+<div class="flex gap-1 bg-surface-container-high p-1 rounded-full border border-outline-variant/30">
+<button class="p-1.5 hover:bg-surface-bright rounded-full transition-colors"><span class="material-symbols-outlined text-[18px] text-outline" data-icon="tune">tune</span></button>
+<button class="p-1.5 hover:bg-surface-bright rounded-full transition-colors"><span class="material-symbols-outlined text-[18px] text-outline" data-icon="insights">insights</span></button>
+</div>
+</div>
+</header>
+<!-- Main Workspace -->
+<main class="ml-[280px] pt-16 h-screen flex relative overflow-hidden">
+<!-- Knowledge Assets Explorer Panel (As seen in source) -->
+<section class="absolute inset-0 z-20 bg-background flex" id="knowledge-assets-explorer">
+<div class="w-[320px] border-r border-outline-variant/30 flex flex-col bg-surface-container-lowest">
+<div class="p-6 border-b border-outline-variant/20">
+<h2 class="font-semibold text-lg text-on-surface">Knowledge Explorer</h2>
+<p class="text-xs text-outline">Semantic analysis active</p>
+</div>
+<div class="px-4 py-4 border-b border-outline-variant/20 space-y-3">
+<div class="relative group">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline text-[18px] group-focus-within:text-primary transition-colors">search</span>
+<input class="w-full pl-10 pr-4 py-2 bg-surface-container-low border border-outline-variant/30 rounded-lg text-sm text-on-surface focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all placeholder:text-outline/50" placeholder="Search nodes..." type="text"/>
+</div>
+<div class="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
+<button class="px-3 py-1 rounded-full bg-primary text-on-primary text-[11px] font-bold whitespace-nowrap">All</button>
+<button class="px-3 py-1 rounded-full bg-surface-container-high text-on-surface-variant text-[11px] font-bold hover:bg-primary/10 hover:text-primary transition-colors whitespace-nowrap">Entities</button>
+<button class="px-3 py-1 rounded-full bg-surface-container-high text-on-surface-variant text-[11px] font-bold hover:bg-primary/10 hover:text-primary transition-colors whitespace-nowrap">Concepts</button>
+</div>
+</div>
+<div class="flex-1 overflow-y-auto p-4 space-y-3">
+<div class="p-3 rounded-xl bg-primary/10 border border-primary/30 cursor-pointer hover:bg-primary/15 transition-colors">
+<div class="flex items-center justify-between mb-1">
+<span class="text-[10px] font-bold text-primary uppercase">Entity</span>
+<span class="text-[10px] text-outline">2m ago</span>
+</div>
+<h4 class="text-sm font-bold text-on-surface">Neural Plasticity</h4>
+</div>
+<div class="p-3 rounded-xl border border-outline-variant/30 cursor-pointer hover:bg-surface-container-low transition-colors">
+<div class="flex items-center justify-between mb-1">
+<span class="text-[10px] font-bold text-secondary uppercase">Concept</span>
+<span class="text-[10px] text-outline">15m ago</span>
+</div>
+<h4 class="text-sm font-bold text-on-surface">Synaptic Weighting</h4>
+</div>
+<div class="p-3 rounded-xl border border-outline-variant/30 cursor-pointer hover:bg-surface-container-low transition-colors">
+<div class="flex items-center justify-between mb-1">
+<span class="text-[10px] font-bold text-tertiary uppercase">Reference</span>
+<span class="text-[10px] text-outline">1h ago</span>
+</div>
+<h4 class="text-sm font-bold text-on-surface">Dopamine Feedback</h4>
+</div>
+</div>
+</div>
+<!-- Graph Viewport -->
+<div class="flex-1 relative bg-surface-container-low overflow-hidden">
+<svg class="absolute inset-0 w-full h-full opacity-60" viewbox="0 0 800 600">
+<defs>
+<radialgradient id="node-glow">
+<stop offset="0%" stop-color="#b5c4ff" stop-opacity="0.3"></stop>
+<stop offset="100%" stop-color="#b5c4ff" stop-opacity="0"></stop>
+</radialgradient>
+</defs>
+<g class="links opacity-30">
+<line stroke="#8d90a0" stroke-width="1" x1="400" x2="250" y1="300" y2="200"></line>
+<line stroke="#8d90a0" stroke-width="1" x1="400" x2="550" y1="300" y2="200"></line>
+<line stroke="#8d90a0" stroke-width="1" x1="400" x2="400" y1="300" y2="500"></line>
+</g>
+<g class="nodes">
+<circle cx="400" cy="300" fill="url(#node-glow)" r="40"></circle>
+<circle class="animate-pulse" cx="400" cy="300" fill="#b5c4ff" r="12"></circle>
+<circle class="stroke-[4px] stroke-primary/30" cx="250" cy="200" fill="#d2bcff" r="8"></circle>
+<circle cx="550" cy="200" fill="#75d1ff" r="8"></circle>
+<circle cx="400" cy="500" fill="#d2bcff" r="8"></circle>
+</g>
+</svg>
+<div class="absolute top-1/2 left-1/2 -translate-x-1/2 translate-y-8 text-center">
+<p class="text-sm font-bold text-primary uppercase tracking-widest">Dopamine Feedback</p>
+<p class="text-[10px] text-outline">Central Intelligence Hub</p>
+</div>
+<!-- Busy Status Bar Overlay -->
+<div class="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-3 bg-surface-container-highest/80 backdrop-blur border border-outline-variant px-4 py-2 rounded-full shadow-2xl z-30">
+<div class="flex items-center gap-2">
+<div class="w-2 h-2 rounded-full bg-amber-500 animate-amber-pulse"></div>
+<span class="text-[11px] font-bold uppercase tracking-widest text-on-surface">LLM: Processing Context...</span>
+</div>
+<div class="h-3 w-[1px] bg-outline-variant"></div>
+<div class="w-32 h-1 bg-surface-container-low rounded-full overflow-hidden">
+<div class="h-full bg-amber-500/50 w-[70%]"></div>
+</div>
+</div>
+<!-- Graph Controls -->
+<div class="absolute top-6 right-6 z-30 flex flex-col gap-2">
+<div class="glass border border-outline-variant/30 rounded-xl p-2 shadow-lg flex flex-col gap-1">
+<button class="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-on-surface-variant hover:text-primary transition-all">
+<span class="material-symbols-outlined text-[18px]">label</span>
+<span class="text-[11px] font-bold uppercase tracking-wider">Labels</span>
+</button>
+<button class="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-primary/10 text-on-surface-variant hover:text-primary transition-all">
+<span class="material-symbols-outlined text-[18px]">hub</span>
+<span class="text-[11px] font-bold uppercase tracking-wider">Relate</span>
+</button>
+</div>
+</div>
+</div>
+</section>
+<!-- Floating Chat Window -->
+<div class="fixed bottom-6 right-6 w-[440px] h-[540px] glass border border-primary/30 rounded-2xl shadow-2xl z-50 flex flex-col overflow-hidden floating-chat" id="chat-window">
+<div class="p-4 bg-primary text-on-primary flex items-center justify-between cursor-move" id="chat-header">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[20px]" data-icon="psychology">psychology</span>
+<span class="font-bold">Aethelgard AI</span>
+</div>
+<div class="flex items-center gap-3">
+<div class="flex items-center bg-white/10 px-2 py-1 rounded text-[9px] font-bold border border-white/20">
+<span class="mr-1">🔭</span> ANALYZING...
+                </div>
+<button class="opacity-70 hover:opacity-100"><span class="material-symbols-outlined text-[18px]" data-icon="close">close</span></button>
+</div>
+</div>
+<div class="flex-1 overflow-y-auto p-4 space-y-4 bg-surface-container/30">
+<div class="flex gap-3">
+<div class="w-8 h-8 rounded-lg bg-primary-container flex items-center justify-center shrink-0">
+<span class="material-symbols-outlined text-on-primary-container text-[18px]" data-icon="smart_toy">smart_toy</span>
+</div>
+<div class="bg-surface-container-high p-4 rounded-2xl rounded-tl-none border border-outline-variant text-sm text-on-surface shadow-sm cursor-pointer hover:border-primary/40 transition-colors" onclick="toggleNotebookOverlay()">
+<p class="mb-2">Synaptic weights are currently being adjusted based on the <strong>Dopamine Feedback</strong> loop. Would you like to view the detailed derivation?</p>
+<div class="flex items-center gap-1 text-[10px] text-primary font-bold uppercase tracking-wider mt-2">
+<span class="material-symbols-outlined text-[14px]" data-icon="fullscreen">fullscreen</span> Expand Analysis
+                    </div>
+</div>
+</div>
+</div>
+<div class="p-4 bg-surface-container-low border-t border-outline-variant/30">
+<div class="flex items-center gap-2 bg-surface-container px-4 py-2 rounded-full border border-outline-variant/20 focus-within:border-primary/50 transition-colors">
+<input class="flex-1 bg-transparent border-none focus:ring-0 text-sm text-on-surface placeholder:text-outline" placeholder="Ask your Second Brain..." type="text"/>
+<button class="w-8 h-8 bg-primary text-on-primary rounded-full flex items-center justify-center shadow-md hover:scale-110 transition-transform">
+<span class="material-symbols-outlined text-[18px]" data-icon="send">send</span>
+</button>
+</div>
+</div>
+</div>
+<!-- Notebook Overlay -->
+<div class="fixed inset-0 z-[60] bg-background/95 backdrop-blur-xl hidden flex items-center justify-center p-12 transition-all" id="notebook-overlay">
+<button class="absolute top-8 right-8 w-12 h-12 flex items-center justify-center text-on-surface hover:bg-surface-container-high rounded-full transition-colors" onclick="toggleNotebookOverlay()">
+<span class="material-symbols-outlined text-[32px]" data-icon="close">close</span>
+</button>
+<div class="w-full max-w-7xl h-full flex gap-8 relative overflow-hidden">
+<div class="w-1/3 flex flex-col gap-4 overflow-y-auto">
+<h2 class="text-2xl font-bold text-on-surface mb-2 flex items-center gap-2">
+<span class="material-symbols-outlined text-primary" data-icon="auto_stories">auto_stories</span>
+                    Sources
+                </h2>
+<div class="p-6 bg-surface-container-lowest border border-outline-variant rounded-2xl hover:border-primary transition-all cursor-pointer group" onclick="openSourceView('Long-term Potentiation in Neural Networks', 'RESEARCH PAPER • 2024', 'https://neuroscience-journal.org/papers/ltp')">
+<span class="text-[10px] font-bold text-primary mb-2 block uppercase">Research • 2024</span>
+<h4 class="font-bold text-on-surface mb-2 group-hover:text-primary">Long-term Potentiation in Neural Networks</h4>
+<p class="text-xs text-outline line-clamp-3">Detailed analysis of how synaptic strength is maintained over time through chemical signals.</p>
+</div>
+</div>
+<div class="w-2/3 bg-surface-container-low border border-outline-variant rounded-3xl shadow-2xl flex flex-col">
+<div class="p-8 border-b border-outline-variant/30 flex justify-between items-center bg-surface-container">
+<div>
+<h1 class="text-3xl font-bold text-on-surface">Neural Reinforcement Analysis</h1>
+<p class="text-outline text-sm">Synthesized by Nexus AI Engine</p>
+</div>
+<button class="bg-primary text-on-primary px-6 py-2.5 rounded-full font-bold shadow-lg hover:shadow-primary/40 transition-all">
+                        Save to Wiki
+                    </button>
+</div>
+<div class="p-12 overflow-y-auto text-on-surface prose prose-invert max-w-none">
+<h2 class="text-xl font-bold mb-4 text-primary">Executive Summary</h2>
+<p class="text-lg mb-6 leading-relaxed text-on-surface-variant">The "Dopamine Feedback" mechanism functions as a global reinforcement signal that modulates the rate of local Hebbian changes, effectively 'tagging' specific synapses for permanent structural modification.</p>
+<div class="p-6 bg-surface-container-high rounded-2xl border border-primary/20 italic text-on-surface">
+                        "The brain doesn't just store data; it weighs importance through a biological economy of chemical signals."
+                    </div>
+</div>
+</div>
+</div>
+</div>
+<!-- Document/Entity Detail Panel -->
+<section class="absolute inset-y-0 right-0 w-[480px] bg-surface-container-lowest border-l border-outline-variant shadow-2xl z-[55] flex flex-col translate-x-full opacity-0 pointer-events-none" id="document-detail-panel">
+<div class="p-6 border-b border-outline-variant flex items-center justify-between">
+<div class="flex flex-col">
+<span class="text-[10px] font-bold text-tertiary uppercase mb-1">Entity • Core Mechanism</span>
+<h2 class="text-2xl font-bold text-on-surface">Dopamine Feedback</h2>
+</div>
+<div class="flex gap-2">
+<button class="w-10 h-10 flex items-center justify-center rounded-full hover:bg-surface-container-high transition-colors">
+<span class="material-symbols-outlined" data-icon="fullscreen">fullscreen</span>
+</button>
+<button class="w-10 h-10 flex items-center justify-center rounded-full hover:bg-surface-container-high transition-colors" onclick="document.getElementById('document-detail-panel').classList.add('translate-x-full', 'opacity-0', 'pointer-events-none')">
+<span class="material-symbols-outlined" data-icon="close">close</span>
+</button>
+</div>
+</div>
+<div class="flex-1 overflow-y-auto p-8 space-y-8">
+<div class="bg-primary-container/20 border border-primary/20 rounded-2xl p-6">
+<h3 class="text-primary font-bold text-xs mb-4 flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px]">auto_awesome</span> AI INSIGHTS
+                </h3>
+<ul class="space-y-3 text-sm text-on-surface-variant">
+<li class="flex gap-2"><span class="text-primary">•</span> <strong>Precision Tagging:</strong> Dopamine acts as a selective gate for structural changes.</li>
+<li class="flex gap-2"><span class="text-primary">•</span> <strong>Temporal Criticality:</strong> Reinforcement must occur within milliseconds.</li>
+</ul>
+</div>
+<div class="space-y-4">
+<h4 class="text-xs font-bold text-outline uppercase tracking-widest">Related Assets</h4>
+<div class="grid gap-2">
+<div class="p-3 rounded-xl bg-surface-container border border-outline-variant/30 hover:border-primary transition-colors cursor-pointer">
+<p class="text-sm font-bold text-on-surface">Synaptic Plasticity Overview</p>
+<p class="text-[10px] text-outline">Entity • 2024</p>
+</div>
+</div>
+</div>
+</div>
+</section>
+</main>
+<script>
+    // Logic to toggle Notebook Overlay
+    function toggleNotebookOverlay() {
+        const overlay = document.getElementById('notebook-overlay');
+        overlay.classList.toggle('hidden');
+        if (!overlay.classList.contains('hidden')) {
+            overlay.classList.add('flex');
+        }
+    }
+
+    // Logic for Asset Detail Panel (Triggered by list items in this demo)
+    document.querySelectorAll('#knowledge-assets-explorer .cursor-pointer').forEach(item => {
+        item.addEventListener('click', () => {
+            const panel = document.getElementById('document-detail-panel');
+            panel.classList.remove('translate-x-full', 'opacity-0', 'pointer-events-none');
+        });
+    });
+
+    // Draggable Logic for Chat Window
+    const chatWindow = document.getElementById('chat-window');
+    const chatHeader = document.getElementById('chat-header');
+    let isDragging = false;
+    let xOffset = 0;
+    let yOffset = 0;
+    let initialX;
+    let initialY;
+
+    chatHeader.addEventListener('mousedown', (e) => {
+        initialX = e.clientX - xOffset;
+        initialY = e.clientY - yOffset;
+        if (e.target === chatHeader || chatHeader.contains(e.target)) {
+            isDragging = true;
+            chatWindow.classList.remove('floating-chat');
+        }
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (isDragging) {
+            e.preventDefault();
+            const currentX = e.clientX - initialX;
+            const currentY = e.clientY - initialY;
+            xOffset = currentX;
+            yOffset = currentY;
+            chatWindow.style.transform = `translate3d(${currentX}px, ${currentY}px, 0)`;
+        }
+    });
+
+    document.addEventListener('mouseup', () => { isDragging = false; });
+</script>
+</body></html>

@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Aethelgard Wiki | Second Brain</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&amp;family=JetBrains+Mono:wght@450;500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "secondary-fixed-dim": "#d4bbff",
+                        "on-tertiary": "#ffffff",
+                        "primary-fixed-dim": "#b8c3ff",
+                        "on-primary-fixed": "#001355",
+                        "tertiary-fixed": "#ffdbc8",
+                        "surface-tint": "#104af0",
+                        "on-secondary-fixed-variant": "#5d00c2",
+                        "on-background": "#191c1e",
+                        "error": "#ba1a1a",
+                        "primary-fixed": "#dde1ff",
+                        "surface-container-highest": "#e1e2e4",
+                        "on-primary-fixed-variant": "#0035bd",
+                        "surface-container-lowest": "#ffffff",
+                        "surface-container-low": "#f3f4f6",
+                        "error-container": "#ffdad6",
+                        "on-primary-container": "#efefff",
+                        "on-secondary-container": "#fdf6ff",
+                        "on-error-container": "#93000a",
+                        "on-surface-variant": "#434656",
+                        "tertiary-fixed-dim": "#ffb68b",
+                        "primary": "#0040df",
+                        "inverse-primary": "#b8c3ff",
+                        "outline-variant": "#c4c5d9",
+                        "on-tertiary-fixed-variant": "#753400",
+                        "surface-dim": "#d9dadc",
+                        "tertiary": "#8a3f00",
+                        "on-tertiary-container": "#ffede4",
+                        "surface-container-high": "#e7e8ea",
+                        "primary-container": "#2d5bff",
+                        "inverse-surface": "#2e3132",
+                        "surface": "#f8f9fb",
+                        "inverse-on-surface": "#f0f1f3",
+                        "secondary-container": "#8d42ff",
+                        "tertiary-container": "#b05200",
+                        "on-tertiary-fixed": "#321200",
+                        "surface-variant": "#e1e2e4",
+                        "on-secondary": "#ffffff",
+                        "outline": "#747688",
+                        "secondary": "#731be5",
+                        "background": "#f8f9fb",
+                        "on-primary": "#ffffff",
+                        "surface-bright": "#f8f9fb",
+                        "on-secondary-fixed": "#270058",
+                        "on-surface": "#191c1e",
+                        "secondary-fixed": "#ebdcff",
+                        "on-error": "#ffffff",
+                        "surface-container": "#edeef0"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "unit-lg": "24px",
+                        "unit-xs": "4px",
+                        "unit-md": "16px",
+                        "grid-margin": "24px",
+                        "unit-sm": "8px",
+                        "sidebar-width": "280px",
+                        "source-pane-width": "35%",
+                        "content-pane-width": "65%",
+                        "gutter": "16px"
+                    },
+                    "fontFamily": {
+                        "headline-md": ["Inter"],
+                        "body-md": ["Inter"],
+                        "code-md": ["JetBrains Mono"],
+                        "body-lg": ["Inter"],
+                        "headline-sm": ["Inter"],
+                        "headline-lg": ["Inter"],
+                        "label-caps": ["Inter"]
+                    },
+                    "fontSize": {
+                        "headline-md": ["24px", {"lineHeight": "32px", "fontWeight": "600"}],
+                        "body-md": ["14px", {"lineHeight": "22px", "fontWeight": "400"}],
+                        "code-md": ["13px", {"lineHeight": "20px", "fontWeight": "450"}],
+                        "body-lg": ["16px", {"lineHeight": "28px", "fontWeight": "400"}],
+                        "headline-sm": ["18px", {"lineHeight": "24px", "fontWeight": "600"}],
+                        "headline-lg": ["32px", {"lineHeight": "40px", "letterSpacing": "-0.02em", "fontWeight": "600"}],
+                        "label-caps": ["11px", {"lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "700"}]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        @keyframes pulse-line {
+            0% { stroke-dashoffset: 100; opacity: 0.3; }
+            50% { opacity: 0.7; }
+            100% { stroke-dashoffset: 0; opacity: 0.3; }
+        }
+        @keyframes float {
+            0% { transform: translateY(0px); }
+            50% { transform: translateY(-8px); }
+            100% { transform: translateY(0px); }
+        }
+        .animate-pulse-line {
+            stroke-dasharray: 10;
+            animation: pulse-line 3s linear infinite;
+        }
+        .glass {
+            background: rgba(255, 255, 255, 0.7);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+        }
+        .node-glow-blue { filter: drop-shadow(0 0 8px rgba(0, 64, 223, 0.4)); }
+        .node-glow-purple { filter: drop-shadow(0 0 8px rgba(115, 27, 229, 0.4)); }
+        .node-glow-orange { filter: drop-shadow(0 0 8px rgba(138, 63, 0, 0.4)); }
+        .floating-chat {
+            animation: float 4s ease-in-out infinite;
+        }
+        
+        body { font-family: 'Inter', sans-serif; }
+    </style>
+</head>
+<body class="bg-background text-on-background overflow-hidden">
+<!-- Sidebar Navigation -->
+<aside class="fixed left-0 top-0 h-full flex flex-col z-40 bg-white border-r border-outline-variant w-[280px]">
+<div class="px-6 py-6 border-b border-outline-variant/30 flex items-center justify-between">
+<h1 class="font-headline-sm text-primary font-bold">LLM Wiki</h1>
+<div class="flex gap-2">
+<span class="material-symbols-outlined text-outline cursor-pointer" data-icon="search">search</span>
+<span class="material-symbols-outlined text-outline cursor-pointer" data-icon="more_vert">more_vert</span>
+</div>
+</div>
+<div class="flex-1 overflow-y-auto">
+<!-- Wiki style navigation -->
+<div class="px-4 py-2 border-b border-outline-variant/10">
+<button class="w-full flex items-center justify-between py-2 text-on-surface font-semibold text-sm">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-sm" data-icon="keyboard_arrow_down">keyboard_arrow_down</span>
+<span>Overview</span>
+</div>
+<span class="text-outline text-xs">1</span>
+</button>
+<div class="pl-6 py-1 text-on-surface-variant text-sm hover:text-primary cursor-pointer">Project Overview</div>
+</div>
+<div class="px-4 py-2">
+<button class="w-full flex items-center justify-between py-2 text-on-surface font-semibold text-sm">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-sm" data-icon="keyboard_arrow_down">keyboard_arrow_down</span>
+<span>Entities</span>
+</div>
+<span class="text-outline text-xs">37</span>
+</button>
+<div class="pl-6 space-y-2 mt-1">
+<div class="text-sm text-on-surface-variant hover:text-primary cursor-pointer truncate">Neural Plasticity</div>
+<div class="text-sm text-on-surface-variant hover:text-primary cursor-pointer truncate">Synaptic Weighting</div>
+<div class="text-sm text-on-surface-variant hover:text-primary cursor-pointer truncate font-bold text-primary">Dopamine Feedback</div>
+<div class="text-sm text-on-surface-variant hover:text-primary cursor-pointer truncate">LTP Mechanisms</div>
+<div class="text-sm text-on-surface-variant hover:text-primary cursor-pointer truncate">Axonal Growth</div>
+<div class="text-sm text-on-surface-variant hover:text-primary cursor-pointer truncate">Hebbian Learning</div>
+</div>
+</div>
+</div>
+<div class="p-4 mt-auto border-t border-outline-variant/30 bg-surface-container-low">
+<div class="flex items-center gap-3">
+<div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center text-white text-xs">QN</div>
+<div class="flex-1 overflow-hidden">
+<p class="text-xs font-bold truncate">Quantum Neural Networks</p>
+<p class="text-[10px] text-outline">Active Researcher</p>
+</div>
+</div>
+</div>
+</aside>
+<!-- Top App Bar -->
+<header class="fixed top-0 right-0 w-[calc(100%-280px)] h-16 flex items-center justify-between px-grid-margin z-30 bg-white/80 backdrop-blur-md border-b border-outline-variant/30">
+<div class="flex items-center gap-4">
+<div class="flex items-center gap-2 text-on-surface-variant">
+<span class="material-symbols-outlined" data-icon="account_tree">account_tree</span>
+<span class="font-headline-sm">Knowledge Graph</span>
+</div>
+<div class="h-4 w-[1px] bg-outline-variant mx-2"></div>
+<div class="flex gap-4 text-xs font-bold text-outline uppercase tracking-wider">
+<span class="hover:text-primary cursor-pointer">70 pages</span>
+<span class="hover:text-primary cursor-pointer">154 links</span>
+</div>
+</div>
+<div class="flex items-center gap-4">
+<div class="flex gap-2 bg-surface-container-low p-1 rounded-full border border-outline-variant/30">
+<button class="p-1.5 hover:bg-white rounded-full transition-colors"><span class="material-symbols-outlined text-[18px]" data-icon="tune">tune</span></button>
+<button class="p-1.5 hover:bg-white rounded-full transition-colors"><span class="material-symbols-outlined text-[18px]" data-icon="groups">groups</span></button>
+<button class="p-1.5 hover:bg-white rounded-full transition-colors"><span class="material-symbols-outlined text-[18px]" data-icon="insights">insights</span></button>
+</div>
+<button class="bg-primary text-on-primary px-6 py-2 rounded-full font-headline-sm text-headline-sm hover:opacity-90 active:scale-95 transition-all">
+            Sync
+        </button>
+</div>
+</header>
+<!-- Main Workspace -->
+<main class="ml-[280px] pt-16 h-screen flex relative overflow-hidden">
+<!-- Knowledge Graph Canvas -->
+<section class="absolute inset-0 z-0 bg-white">
+<!-- Three.js Integration -->
+<!-- STITCH_THREEJS_START:ANIMATION_34 class="absolute inset-0 w-full h-full pointer-events-none z-20" -->
+<div class="absolute inset-0 w-full h-full pointer-events-none z-20" style="display:block;">
+<script src="https://ajax.googleapis.com/ajax/libs/threejs/r125/three.min.js"></script>
+<div id="threejs-container-ANIMATION_34" style="width:100%;height:100%"></div>
+<script>
+(function() {
+  const container = document.getElementById('threejs-container-ANIMATION_34');
+  const devicePixelRatio = window.devicePixelRatio || 1;
+  
+const width = container.clientWidth || window.innerWidth;
+const height = container.clientHeight || window.innerHeight;
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
+camera.position.z = 5;
+
+const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+renderer.setSize(width, height);
+renderer.setPixelRatio(window.devicePixelRatio);
+container.appendChild(renderer.domElement);
+
+// Knowledge Graph Simulation Nodes
+const nodeCount = 15;
+const nodes = [];
+const nodeGeometry = new THREE.SphereGeometry(0.1, 16, 16);
+const nodeMaterial = new THREE.MeshBasicMaterial({ color: 0x2d5bff });
+
+for (let i = 0; i < nodeCount; i++) {
+    const node = new THREE.Mesh(nodeGeometry, nodeMaterial);
+    node.position.set(
+        (Math.random() - 0.5) * 10,
+        (Math.random() - 0.5) * 6,
+        (Math.random() - 0.5) * 2
+    );
+    scene.add(node);
+    nodes.push({
+        mesh: node,
+        originalPos: node.position.clone(),
+        velocity: new THREE.Vector3((Math.random() - 0.5) * 0.01, (Math.random() - 0.5) * 0.01, 0),
+        isCollecting: false
+    });
+}
+
+// Particles for "Collecting Nodes" effect
+const particleCount = 100;
+const particlesGeometry = new THREE.BufferGeometry();
+const positions = new Float32Array(particleCount * 3);
+const colors = new Float32Array(particleCount * 3);
+
+for (let i = 0; i < particleCount; i++) {
+    positions[i * 3] = 0;
+    positions[i * 3 + 1] = 0;
+    positions[i * 3 + 2] = 0;
+    
+    colors[i * 3] = 0.45; // 2d5bff primary blue
+    colors[i * 3 + 1] = 0.35;
+    colors[i * 3 + 2] = 1.0;
+}
+
+particlesGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+particlesGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+const particlesMaterial = new THREE.PointsMaterial({
+    size: 0.05,
+    vertexColors: true,
+    transparent: true,
+    opacity: 0
+});
+
+const particleSystem = new THREE.Points(particlesGeometry, particlesMaterial);
+scene.add(particleSystem);
+
+// Target for Chatbot (Bottom Right)
+const chatTarget = new THREE.Vector3(4, -3, 0);
+
+let state = 'idle'; // idle, searching, collecting
+let timer = 0;
+
+function animate() {
+    requestAnimationFrame(animate);
+    timer += 0.01;
+
+    nodes.forEach(node => {
+        if (state === 'idle') {
+            node.mesh.position.add(node.velocity);
+            // Bounce
+            if (Math.abs(node.mesh.position.x) > 5) node.velocity.x *= -1;
+            if (Math.abs(node.mesh.position.y) > 3) node.velocity.y *= -1;
+            node.mesh.scale.setScalar(1 + Math.sin(timer * 2 + node.mesh.position.x) * 0.1);
+        } else if (state === 'collecting') {
+            // Pull towards chat
+            node.mesh.position.lerp(chatTarget, 0.05);
+            node.mesh.scale.lerp(new THREE.Vector3(0, 0, 0), 0.05);
+        }
+    });
+
+    if (state === 'searching') {
+        particlesMaterial.opacity = Math.min(particlesMaterial.opacity + 0.02, 0.8);
+        const posArray = particlesGeometry.attributes.position.array;
+        for (let i = 0; i < particleCount; i++) {
+            // Spiral towards target
+            const angle = timer * 5 + i * 0.2;
+            const radius = 2 * (1 - (i / particleCount));
+            posArray[i * 3] = chatTarget.x + Math.cos(angle) * radius;
+            posArray[i * 3 + 1] = chatTarget.y + Math.sin(angle) * radius;
+            posArray[i * 3 + 2] = (Math.random() - 0.5) * 0.5;
+        }
+        particlesGeometry.attributes.position.needsUpdate = true;
+    } else {
+        particlesMaterial.opacity = Math.max(particlesMaterial.opacity - 0.02, 0);
+    }
+
+    renderer.render(scene, camera);
+}
+
+animate();
+
+// Event Listeners for Demo (Simulated based on scroll or click)
+window.addEventListener('click', () => {
+    if (state === 'idle') state = 'searching';
+    else if (state === 'searching') state = 'collecting';
+    else state = 'idle';
+});
+
+window.addEventListener('resize', () => {
+    const w = container.clientWidth || window.innerWidth;
+    const h = container.clientHeight || window.innerHeight;
+    renderer.setSize(w, h);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+});
+
+})();
+</script>
+</div>
+<!-- STITCH_THREEJS_END:ANIMATION_34 -->
+<!-- Legacy SVG Graph Base -->
+<svg class="absolute inset-0 pointer-events-none opacity-40" height="100%" viewbox="0 0 800 600" width="100%">
+<line stroke="#E5E7EB" stroke-width="1" x1="200" x2="400" y1="200" y2="300"></line>
+<line stroke="#E5E7EB" stroke-width="1" x1="400" x2="350" y1="300" y2="450"></line>
+<line stroke="#E5E7EB" stroke-width="1" x1="400" x2="550" y1="300" y2="250"></line>
+<path class="animate-pulse-line" d="M 400 300 Q 550 450 700 520" fill="none" stroke="url(#gradient-flow)" stroke-dasharray="8,4" stroke-width="2"></path>
+<defs>
+<lineargradient id="gradient-flow" x1="0%" x2="100%" y1="0%" y2="100%">
+<stop offset="0%" stop-color="#0040df"></stop>
+<stop offset="100%" stop-color="#731be5"></stop>
+</lineargradient>
+</defs>
+</svg>
+<!-- UI Interactive Nodes -->
+<div class="absolute top-[30%] left-[45%] group z-30">
+<div class="w-16 h-16 rounded-full bg-secondary flex items-center justify-center text-white node-glow-purple cursor-pointer transition-transform hover:scale-110 relative">
+<span class="material-symbols-outlined text-[28px]" data-icon="auto_awesome">auto_awesome</span>
+</div>
+<div class="absolute top-full left-1/2 -translate-x-1/2 mt-2 bg-white/90 backdrop-blur px-3 py-1 rounded-full shadow-lg border border-outline-variant/30 text-[10px] font-bold whitespace-nowrap">Core Intelligence</div>
+</div>
+</section>
+<!-- Floating Canvas Controls -->
+<div class="absolute bottom-8 left-8 flex flex-col gap-2 z-30">
+<button class="w-10 h-10 rounded-full glass border border-outline-variant/50 flex items-center justify-center shadow-lg hover:bg-white transition-all text-on-surface"><span class="material-symbols-outlined" data-icon="add">add</span></button>
+<button class="w-10 h-10 rounded-full glass border border-outline-variant/50 flex items-center justify-center shadow-lg hover:bg-white transition-all text-on-surface"><span class="material-symbols-outlined" data-icon="remove">remove</span></button>
+<button class="w-10 h-10 rounded-full glass border border-outline-variant/50 flex items-center justify-center shadow-lg hover:bg-white transition-all text-on-surface"><span class="material-symbols-outlined" data-icon="filter_center_focus">filter_center_focus</span></button>
+</div>
+<!-- Floating Chat Window -->
+<div class="fixed bottom-6 right-6 w-[440px] h-[540px] glass border border-primary/20 rounded-2xl shadow-2xl z-50 flex flex-col overflow-hidden floating-chat cursor-default transition-all duration-300" id="chat-window">
+<!-- Chat Header -->
+<div class="p-4 bg-primary text-on-primary flex items-center justify-between cursor-move" id="chat-header">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[20px]" data-icon="psychology">psychology</span>
+<span class="font-headline-sm">Aethelgard AI</span>
+</div>
+<div class="flex items-center gap-3">
+<div class="flex items-center bg-white/10 px-2 py-1 rounded text-[9px] font-bold tracking-tight animate-pulse border border-white/20">
+<span class="mr-1">🔭</span> SEARCHING EXTERNAL WEB...
+                </div>
+<button class="opacity-70 hover:opacity-100 transition-opacity"><span class="material-symbols-outlined text-[18px]" data-icon="close">close</span></button>
+</div>
+</div>
+<!-- Chat Messages -->
+<div class="flex-1 overflow-y-auto p-4 space-y-4 bg-white/30" id="chat-messages">
+<div class="flex gap-3">
+<div class="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+<span class="material-symbols-outlined text-primary text-[18px]" data-icon="smart_toy">smart_toy</span>
+</div>
+<div class="group relative">
+<div class="bg-white p-4 rounded-2xl rounded-tl-none border border-outline-variant/30 text-body-md shadow-sm cursor-pointer hover:border-primary/40 transition-colors" onclick="toggleNotebookOverlay()">
+<p class="mb-2">I've synthesized the recent studies on <strong>Dopamine Reinforcement</strong>. It appears to act as a precision signal for synaptic weighting.</p>
+<div class="flex items-center gap-1 text-[10px] text-primary font-bold uppercase tracking-wider mt-2 opacity-60 group-hover:opacity-100 transition-opacity">
+<span class="material-symbols-outlined text-[14px]" data-icon="fullscreen">fullscreen</span> Expand into Notebook
+                        </div>
+</div>
+</div>
+</div>
+<!-- Bot Response with Save Button -->
+<div class="flex gap-3">
+<div class="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+<span class="material-symbols-outlined text-primary text-[18px]" data-icon="smart_toy">smart_toy</span>
+</div>
+<div class="flex-1 space-y-2">
+<div class="bg-white p-4 rounded-2xl rounded-tl-none border border-primary/20 text-body-md shadow-sm border-l-4 border-l-primary relative">
+<div class="flex items-center gap-1 text-primary font-bold text-[10px] mb-2">
+<span class="material-symbols-outlined text-[12px]" data-icon="auto_fix_high">auto_fix_high</span> GENERATED ANALYSIS
+                        </div>
+<p>Dopamine serves as a reinforcement signal, effectively "tagging" specific synapses for long-term potentiation (LTP). This increases the synaptic weight during learning events.</p>
+<div class="mt-4 pt-4 border-t border-outline-variant/20 flex justify-between items-center">
+<div class="flex gap-2">
+<button class="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-primary text-on-primary text-[11px] font-bold hover:scale-105 transition-transform" onclick="alert('Saved to Knowledge Assets!')">
+<span class="material-symbols-outlined text-[14px]" data-icon="library_add">library_add</span> Save to Wiki
+                                </button>
+<button class="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-surface-container-high text-on-surface-variant text-[11px] font-bold hover:bg-surface-container-highest transition-colors">
+<span class="material-symbols-outlined text-[14px]" data-icon="share">share</span> Share
+                                </button>
+</div>
+<span class="text-[10px] text-outline italic">Generated via GPT-4o</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Chat Input -->
+<div class="p-4 bg-white border-t border-outline-variant/30">
+<div class="flex items-center gap-2 bg-surface-container-low px-4 py-2 rounded-full border border-outline-variant/20 focus-within:border-primary/50 transition-colors">
+<input class="flex-1 bg-transparent border-none focus:ring-0 text-sm placeholder:text-outline" placeholder="Ask your Second Brain..." type="text"/>
+<button class="w-8 h-8 bg-primary text-on-primary rounded-full flex items-center justify-center shadow-md hover:scale-110 transition-transform">
+<span class="material-symbols-outlined text-[18px]" data-icon="send">send</span>
+</button>
+</div>
+</div>
+</div>
+<!-- NotebookLM Style Overlay Expansion -->
+<div class="fixed inset-0 z-[60] bg-white/80 backdrop-blur-xl hidden flex items-center justify-center p-12 transition-all" id="notebook-overlay">
+<button class="absolute top-8 right-8 w-12 h-12 flex items-center justify-center text-on-surface hover:bg-surface-container-high rounded-full transition-colors" onclick="toggleNotebookOverlay()">
+<span class="material-symbols-outlined text-[32px]" data-icon="close">close</span>
+</button>
+<div class="w-full max-w-7xl h-full flex gap-8">
+<!-- Left: Sources Cards -->
+<div class="w-1/3 flex flex-col gap-4 overflow-y-auto pr-4">
+<h2 class="font-headline-md text-headline-md mb-2 flex items-center gap-2">
+<span class="material-symbols-outlined" data-icon="auto_stories">auto_stories</span>
+                    Sources (5)
+                </h2>
+<!-- Source Card 1 -->
+<div class="p-6 bg-white border border-outline-variant/30 rounded-2xl shadow-sm hover:border-primary transition-all cursor-pointer">
+<span class="text-[10px] font-bold text-primary mb-2 block">RESEARCH PAPER • 2024</span>
+<h4 class="font-headline-sm text-sm mb-2">Long-term Potentiation in Neural Networks</h4>
+<p class="text-xs text-on-surface-variant line-clamp-3">Detailed analysis of how synaptic strength is maintained over time through chemical signals...</p>
+</div>
+<!-- Source Card 2 -->
+<div class="p-6 bg-white border border-outline-variant/30 rounded-2xl shadow-sm hover:border-primary transition-all cursor-pointer">
+<span class="text-[10px] font-bold text-secondary mb-2 block">WIKI ENTRY • UPDATED TODAY</span>
+<h4 class="font-headline-sm text-sm mb-2">The Role of Dopamine in Learning</h4>
+<p class="text-xs text-on-surface-variant line-clamp-3">Comprehensive overview of dopamine as a predictive error signal in reward-based learning...</p>
+</div>
+<!-- Source Card 3 -->
+<div class="p-6 bg-white border border-outline-variant/30 rounded-2xl shadow-sm hover:border-primary transition-all cursor-pointer">
+<span class="text-[10px] font-bold text-tertiary mb-2 block">EXTERNAL WEB • NEW</span>
+<h4 class="font-headline-sm text-sm mb-2">Neuromorphic Computing Trends</h4>
+<p class="text-xs text-on-surface-variant line-clamp-3">Bridging biological neural activity with hardware implementations of plasticity...</p>
+</div>
+</div>
+<!-- Right: Rich Text Summary -->
+<div class="w-2/3 bg-white border border-outline-variant/20 rounded-3xl shadow-xl flex flex-col">
+<div class="p-8 border-b border-outline-variant/20 flex justify-between items-center">
+<div>
+<h1 class="text-3xl font-bold text-on-surface">Neural Reinforcement Analysis</h1>
+<p class="text-outline text-sm">Synthesized by Aethelgard AI from internal &amp; external datasets</p>
+</div>
+<button class="bg-primary text-on-primary px-6 py-2.5 rounded-full font-bold shadow-lg hover:shadow-primary/20 transition-all">
+                        Save to Project Wiki
+                    </button>
+</div>
+<div class="p-12 overflow-y-auto text-on-surface prose max-w-none">
+<h2 class="text-xl font-bold mb-4">Executive Summary</h2>
+<p class="text-body-lg mb-6 leading-relaxed">Based on the provided nodes and external research, the connection between <strong>Neural Plasticity</strong> and <strong>Synaptic Weighting</strong> is mediated primarily through neuromodulatory systems. The "Dopamine Feedback" mechanism functions as a global reinforcement signal that modulates the rate of local Hebbian changes.</p>
+<h3 class="text-lg font-bold mb-3">Key Insights</h3>
+<ul class="space-y-4 mb-8">
+<li class="flex gap-4">
+<span class="w-6 h-6 rounded-full bg-primary/10 text-primary flex items-center justify-center shrink-0 font-bold">1</span>
+<span><strong>Hebbian Scaling:</strong> Synaptic weights are not static but exist in a state of dynamic equilibrium, adjusted by the frequency of action potential pairings.</span>
+</li>
+<li class="flex gap-4">
+<span class="w-6 h-6 rounded-full bg-primary/10 text-primary flex items-center justify-center shrink-0 font-bold">2</span>
+<span><strong>Neuromodulation:</strong> Dopamine acts as a 'gate', allowing for structural changes (plasticity) only when relevant information is processed.</span>
+</li>
+</ul>
+<div class="p-6 bg-surface-container-low rounded-2xl border border-primary/10 italic">
+                        "The brain doesn't just store data; it weighs importance through a biological economy of chemical signals."
+                    </div>
+</div>
+</div>
+</div>
+</div>
+</main>
+<script>
+    // Toggle Notebook Overlay
+    function toggleNotebookOverlay() {
+        const overlay = document.getElementById('notebook-overlay');
+        overlay.classList.toggle('hidden');
+        if (!overlay.classList.contains('hidden')) {
+            overlay.classList.add('flex');
+        }
+    }
+
+    // Draggable Logic for Chat Window
+    const chatWindow = document.getElementById('chat-window');
+    const chatHeader = document.getElementById('chat-header');
+    let isDragging = false;
+    let currentX;
+    let currentY;
+    let initialX;
+    let initialY;
+    let xOffset = 0;
+    let yOffset = 0;
+
+    chatHeader.addEventListener('mousedown', dragStart);
+    document.addEventListener('mousemove', drag);
+    document.addEventListener('mouseup', dragEnd);
+
+    function dragStart(e) {
+        initialX = e.clientX - xOffset;
+        initialY = e.clientY - yOffset;
+        if (e.target === chatHeader || chatHeader.contains(e.target)) {
+            isDragging = true;
+            chatWindow.classList.remove('floating-chat'); // Disable animation while dragging
+        }
+    }
+
+    function drag(e) {
+        if (isDragging) {
+            e.preventDefault();
+            currentX = e.clientX - initialX;
+            currentY = e.clientY - initialY;
+            xOffset = currentX;
+            yOffset = currentY;
+            setTranslate(currentX, currentY, chatWindow);
+        }
+    }
+
+    function setTranslate(xPos, yPos, el) {
+        el.style.transform = `translate3d(${xPos}px, ${yPos}px, 0)`;
+    }
+
+    function dragEnd(e) {
+        if (isDragging) {
+            isDragging = false;
+            // Optionally snap back or stay, keep floating animation off if moved far
+        }
+    }
+
+    // Simulate atmosphere nodes random movement (legacy)
+    setInterval(() => {
+        const nodes = document.querySelectorAll('.node-glow-blue, .node-glow-purple, .node-glow-orange');
+        if (nodes.length) {
+            const randomNode = nodes[Math.floor(Math.random() * nodes.length)];
+            randomNode.classList.add('scale-110');
+            setTimeout(() => randomNode.classList.remove('scale-110'), 600);
+        }
+    }, 4000);
+</script>
+</body></html>

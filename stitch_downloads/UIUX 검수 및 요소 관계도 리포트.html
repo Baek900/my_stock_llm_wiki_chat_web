@@ -1,0 +1,42 @@
+# UI/UX 검수 리포트: Cognitive Nexus 지식 관리 시스템
+
+## 1. 종합 평가
+현재 구축된 'Cognitive Nexus' 지식 관리 시스템은 **'지식 탐색(Graph) - 심층 분석(Split View) - 지식 고도화(Detail View)'**로 이어지는 일관된 사용자 여정을 성공적으로 구현하고 있습니다. 
+
+### 핵심 강점
+- **시각적 통일성**: `Cognitive Nexus` 디자인 시스템의 라이트 모드 컬러 팔레트와 타이포그래피가 모든 화면(SCREEN_2~13)에 일관되게 적용되어 있어 브랜드 신뢰도가 높습니다.
+- **직관적인 내비게이션**: 좌측 사이드바(Home, Graph, Files, Settings)를 통해 시스템의 주요 기능을 즉각적으로 인지하고 이동할 수 있습니다.
+- **정보 위계**: 카드 기반 레이아웃과 명확한 헤딩 태그 사용으로 복잡한 지식 데이터 간의 선후 관계를 명확히 보여줍니다.
+
+### 개선 권장 사항
+- **상태 전이의 명확화**: 그래프 뷰에서 필터링이 적용되었을 때(SCREEN_3), 어떤 노드가 숨겨졌는지에 대한 '빈 상태(Empty State)' 피드백을 강화하면 더욱 직관적일 것입니다.
+- **모달 vs 슬라이드 일관성**: 현재 소스 보기와 노드 상세 보기는 우측 슬라이드 패널로 통일되어 있으나, 전체화면 확대 시의 인터랙션을 좀 더 부드러운 트랜지션으로 보완할 수 있습니다.
+
+---
+
+## 2. 페이지 요소별 관계도 (Interactive Node Architecture)
+
+시스템 내 각 화면 구성 요소들의 연결 관계를 논리적 노드 구조로 정리하였습니다.
+
+- **Central Hub: [Knowledge Graph]** (핵심 탐색 지점)
+  - ├── **Node Selection** (인터랙션: 클릭)
+  - │   └── ──> **[Node Detail Panel]** (SCREEN_9, 10)
+  - │       ├── Related Documents (연결 자산 노드)
+  - │       ├── Recommended Nodes (인사이트 확장 노드)
+  - │       └── Full Screen Expand (몰입 모드 전환)
+  - ├── **Filter Controls** (인터랙션: 토글/검색)
+  - │   └── ──> **[Filtered Graph View]** (SCREEN_3, 7)
+  - │       └── Dynamic Node Visibility (데이터 정제)
+  - └── **Aethelgard AI** (플로팅 인터페이스)
+      └── ──> **[AI Research / Split View]** (SCREEN_2, 11)
+          ├── Source Original Text (원문 데이터)
+          └── Synthesis Summary (AI 생성 지식)
+              └── Save to Wiki (지식 자산화 버튼)
+
+---
+
+## 3. 검수 대상 화면 목록 (Audit Scope)
+- **탐색 계층**: SCREEN_13 (Assets Explorer), SCREEN_7 (Advanced Filter), SCREEN_3 (Filtered View)
+- **상세/분석 계층**: SCREEN_10 (Node Detail), SCREEN_9 (Enhanced Detail), SCREEN_8 (Source Inspection)
+- **연구/저장 계층**: SCREEN_11 (Split View), SCREEN_2 (Split View with Save)
+- **통합 경험**: SCREEN_12 (Motion Experience), SCREEN_5 (Floating Chat)

@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Aethelgard Wiki | Second Brain</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&amp;family=JetBrains+Mono:wght@450;500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "secondary-fixed-dim": "#d4bbff",
+                        "on-tertiary": "#ffffff",
+                        "primary-fixed-dim": "#b8c3ff",
+                        "on-primary-fixed": "#001355",
+                        "tertiary-fixed": "#ffdbc8",
+                        "surface-tint": "#104af0",
+                        "on-secondary-fixed-variant": "#5d00c2",
+                        "on-background": "#191c1e",
+                        "error": "#ba1a1a",
+                        "primary-fixed": "#dde1ff",
+                        "surface-container-highest": "#e1e2e4",
+                        "on-primary-fixed-variant": "#0035bd",
+                        "surface-container-lowest": "#ffffff",
+                        "surface-container-low": "#f3f4f6",
+                        "error-container": "#ffdad6",
+                        "on-primary-container": "#efefff",
+                        "on-secondary-container": "#fdf6ff",
+                        "on-error-container": "#93000a",
+                        "on-surface-variant": "#434656",
+                        "tertiary-fixed-dim": "#ffb68b",
+                        "primary": "#0040df",
+                        "inverse-primary": "#b8c3ff",
+                        "outline-variant": "#c4c5d9",
+                        "on-tertiary-fixed-variant": "#753400",
+                        "surface-dim": "#d9dadc",
+                        "tertiary": "#8a3f00",
+                        "on-tertiary-container": "#ffede4",
+                        "surface-container-high": "#e7e8ea",
+                        "primary-container": "#2d5bff",
+                        "inverse-surface": "#2e3132",
+                        "surface": "#f8f9fb",
+                        "inverse-on-surface": "#f0f1f3",
+                        "secondary-container": "#8d42ff",
+                        "tertiary-container": "#b05200",
+                        "on-tertiary-fixed": "#321200",
+                        "surface-variant": "#e1e2e4",
+                        "on-secondary": "#ffffff",
+                        "outline": "#747688",
+                        "secondary": "#731be5",
+                        "background": "#f8f9fb",
+                        "on-primary": "#ffffff",
+                        "surface-bright": "#f8f9fb",
+                        "on-secondary-fixed": "#270058",
+                        "on-surface": "#191c1e",
+                        "secondary-fixed": "#ebdcff",
+                        "on-error": "#ffffff",
+                        "surface-container": "#edeef0"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "unit-lg": "24px",
+                        "unit-xs": "4px",
+                        "unit-md": "16px",
+                        "grid-margin": "24px",
+                        "unit-sm": "8px",
+                        "sidebar-width": "280px",
+                        "source-pane-width": "35%",
+                        "content-pane-width": "65%",
+                        "gutter": "16px"
+                    },
+                    "fontFamily": {
+                        "headline-md": ["Inter"],
+                        "body-md": ["Inter"],
+                        "code-md": ["JetBrains Mono"],
+                        "body-lg": ["Inter"],
+                        "headline-sm": ["Inter"],
+                        "headline-lg": ["Inter"],
+                        "label-caps": ["Inter"]
+                    },
+                    "fontSize": {
+                        "headline-md": ["24px", {"lineHeight": "32px", "fontWeight": "600"}],
+                        "body-md": ["14px", {"lineHeight": "22px", "fontWeight": "400"}],
+                        "code-md": ["13px", {"lineHeight": "20px", "fontWeight": "450"}],
+                        "body-lg": ["16px", {"lineHeight": "28px", "fontWeight": "400"}],
+                        "headline-sm": ["18px", {"lineHeight": "24px", "fontWeight": "600"}],
+                        "headline-lg": ["32px", {"lineHeight": "40px", "letterSpacing": "-0.02em", "fontWeight": "600"}],
+                        "label-caps": ["11px", {"lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "700"}]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        @keyframes pulse-line {
+            0% { stroke-dashoffset: 100; opacity: 0.3; }
+            50% { opacity: 0.7; }
+            100% { stroke-dashoffset: 0; opacity: 0.3; }
+        }
+        .animate-pulse-line {
+            stroke-dasharray: 10;
+            animation: pulse-line 3s linear infinite;
+        }
+        .glass {
+            background: rgba(255, 255, 255, 0.7);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+        }
+        .node-glow-blue { filter: drop-shadow(0 0 8px rgba(0, 64, 223, 0.4)); }
+        .node-glow-purple { filter: drop-shadow(0 0 8px rgba(115, 27, 229, 0.4)); }
+        .node-glow-orange { filter: drop-shadow(0 0 8px rgba(138, 63, 0, 0.4)); }
+        
+        body { font-family: 'Inter', sans-serif; }
+    </style>
+</head>
+<body class="bg-background text-on-background overflow-hidden">
+<!-- Sidebar Navigation (SideNavBar) -->
+<aside class="fixed left-0 top-0 h-full flex flex-col py-grid-margin z-40 bg-surface border-r border-outline-variant w-[280px]">
+<div class="px-6 mb-8">
+<h1 class="font-headline-md text-headline-md font-bold text-primary">Second Brain</h1>
+<p class="text-on-surface-variant font-label-caps text-[10px] tracking-widest uppercase">AI Research Environment</p>
+</div>
+<nav class="flex-1 px-4 space-y-1">
+<a class="flex items-center px-4 py-3 rounded-lg text-primary border-r-4 border-primary bg-surface-container-low transition-all scale-95" href="#">
+<span class="material-symbols-outlined mr-3" data-icon="home">home</span>
+<span class="font-headline-sm text-headline-sm">Home</span>
+</a>
+<a class="flex items-center px-4 py-3 rounded-lg text-on-surface-variant hover:bg-surface-container-low transition-colors" href="#">
+<span class="material-symbols-outlined mr-3" data-icon="account_tree">account_tree</span>
+<span class="font-headline-sm text-headline-sm">Graph</span>
+</a>
+<a class="flex items-center px-4 py-3 rounded-lg text-on-surface-variant hover:bg-surface-container-low transition-colors" href="#">
+<span class="material-symbols-outlined mr-3" data-icon="folder">folder</span>
+<span class="font-headline-sm text-headline-sm">Files</span>
+</a>
+<a class="flex items-center px-4 py-3 rounded-lg text-on-surface-variant hover:bg-surface-container-low transition-colors" href="#">
+<span class="material-symbols-outlined mr-3" data-icon="settings">settings</span>
+<span class="font-headline-sm text-headline-sm">Settings</span>
+</a>
+</nav>
+<div class="px-4 mt-auto">
+<div class="p-4 rounded-xl bg-surface-container-high overflow-hidden border border-outline-variant/30 relative">
+<img alt="Dashboard Context" class="absolute inset-0 w-full h-full object-cover opacity-20 pointer-events-none" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDyep2wCd1q9GSZqNMXJ6kpIoGP2ll3By16RiOJEk0IWAkEw63lSiKUJxldwwPimRowajSqU9LXFdDZHHGfzMt2lg1HEx2GqPa5Q3e3PIp-07dVbqv4pyD5vJjn-XdcGQ6L15vI-HMClc7bigUbiNOQJSO0RFgwZy1eAumXGxY1YdrD96F1AT3yA3jl7IhhQlCaLXNkKaZDy2aq7tbbcDySfyHDQgvjtDu2lkHt4sEPn2GRGbGERHhuGzYt6YG4bOxjM5vJLBHTOkPG"/>
+<p class="font-label-caps text-label-caps mb-2 text-on-surface-variant">Active Project</p>
+<p class="font-headline-sm text-headline-sm text-primary truncate">Quantum Neural Networks</p>
+<div class="mt-3 flex -space-x-2">
+<div class="w-6 h-6 rounded-full bg-primary-fixed-dim border-2 border-surface"></div>
+<div class="w-6 h-6 rounded-full bg-secondary-fixed-dim border-2 border-surface"></div>
+<div class="w-6 h-6 rounded-full bg-tertiary-fixed-dim border-2 border-surface"></div>
+</div>
+</div>
+</div>
+</aside>
+<!-- Top App Bar (TopAppBar) -->
+<header class="fixed top-0 right-0 w-[calc(100%-280px)] h-16 flex items-center justify-between px-grid-margin z-30 bg-surface/70 backdrop-blur-md border-b border-outline-variant/30">
+<div class="flex items-center gap-4 flex-1">
+<div class="relative w-full max-w-md">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline" data-icon="search">search</span>
+<input class="w-full bg-surface-container-low border-none rounded-full py-2 pl-10 pr-4 text-body-md focus:ring-2 focus:ring-primary/20" placeholder="Search the graph..." type="text"/>
+</div>
+</div>
+<div class="flex items-center gap-6">
+<div class="flex gap-4">
+<button class="text-on-surface-variant hover:text-primary transition-opacity flex items-center">
+<span class="material-symbols-outlined" data-icon="notifications">notifications</span>
+</button>
+<button class="text-on-surface-variant hover:text-primary transition-opacity flex items-center">
+<span class="material-symbols-outlined" data-icon="history">history</span>
+</button>
+</div>
+<button class="bg-primary text-on-primary px-6 py-2 rounded-full font-headline-sm text-headline-sm hover:opacity-90 active:scale-95 transition-all">
+                Sync
+            </button>
+<div class="w-8 h-8 rounded-full bg-surface-container-highest overflow-hidden">
+<img class="w-full h-full object-cover" data-alt="Close-up professional portrait of a tech researcher with a minimalist aesthetic, soft studio lighting, high-key white background, representing a modern digital identity." src="https://lh3.googleusercontent.com/aida-public/AB6AXuDmWD6t6A99JWdspet9ZW2DDW311aW2bROMqspIYKhUOiHTN-o_osxGgU9V5W2LtZPDz1A8RCK6P1qZCKu5yiHsziXNm1lbai1clGkSejhVz49N3yDvd-9Khbb8jQofuy9HDVhsCN7OLiREgBtWj7ldbkNxCEknd9RpyNYTCAcp19dRNhp3V_gJMuMFAN25JMij42YEENDU0FPK8hpX5tIwNIjEuqLUJ4wG1LGVtcUsFeqjws9dDTi3Z1nf41OkSnDlBO-tyV7498Ib"/>
+</div>
+</div>
+</header>
+<!-- Main Workspace Area -->
+<main class="ml-[280px] pt-16 h-screen flex relative">
+<!-- Left Pane: Entities (35%) -->
+<section class="w-[35%] h-full border-r border-outline-variant/30 bg-surface flex flex-col">
+<div class="p-6 border-b border-outline-variant/20 flex justify-between items-center">
+<h2 class="font-headline-md text-headline-md">Knowledge Assets</h2>
+<button class="text-primary"><span class="material-symbols-outlined" data-icon="add_circle">add_circle</span></button>
+</div>
+<div class="flex-1 overflow-y-auto p-4 space-y-4">
+<!-- Entity Card -->
+<div class="p-4 rounded-xl bg-white border border-outline-variant/40 shadow-sm hover:border-primary/50 transition-all cursor-pointer group">
+<div class="flex justify-between items-start mb-2">
+<span class="px-2 py-1 bg-primary-container text-on-primary-container rounded font-code-md text-[10px] uppercase tracking-wider">Entity</span>
+<span class="text-outline font-label-caps text-[10px]">Just now</span>
+</div>
+<h3 class="font-headline-sm text-headline-sm group-hover:text-primary transition-colors">Neural Plasticity</h3>
+<p class="text-body-md text-on-surface-variant mt-1 line-clamp-2">Research regarding the brain's ability to reorganize itself by forming new neural connections throughout life.</p>
+<div class="mt-3 flex gap-2">
+<span class="text-tertiary font-code-md text-xs">[4 citations]</span>
+<span class="text-outline text-xs">Modified by AI Agent</span>
+</div>
+</div>
+<div class="p-4 rounded-xl bg-white border border-outline-variant/40 shadow-sm hover:border-primary/50 transition-all cursor-pointer group">
+<div class="flex justify-between items-start mb-2">
+<span class="px-2 py-1 bg-secondary-container text-on-secondary-container rounded font-code-md text-[10px] uppercase tracking-wider">Concept</span>
+<span class="text-outline font-label-caps text-[10px]">2h ago</span>
+</div>
+<h3 class="font-headline-sm text-headline-sm group-hover:text-primary transition-colors">Synaptic Weighting</h3>
+<p class="text-body-md text-on-surface-variant mt-1 line-clamp-2">The strength or amplitude of a connection between two nodes, corresponding in biology to the influence one neuron exerts on another.</p>
+</div>
+<div class="p-4 rounded-xl bg-white border border-outline-variant/40 shadow-sm hover:border-primary/50 transition-all cursor-pointer group">
+<div class="flex justify-between items-start mb-2">
+<span class="px-2 py-1 bg-tertiary-container text-on-tertiary-container rounded font-code-md text-[10px] uppercase tracking-wider">Reference</span>
+<span class="text-outline font-label-caps text-[10px]">1d ago</span>
+</div>
+<h3 class="font-headline-sm text-headline-sm group-hover:text-primary transition-colors">Dopamine Feedback</h3>
+<div class="mt-2 flex flex-wrap gap-1">
+<span class="bg-tertiary-fixed text-on-tertiary-fixed-variant px-2 py-0.5 rounded-full text-[10px] font-bold">#NEURO</span>
+<span class="bg-primary-fixed text-on-primary-fixed-variant px-2 py-0.5 rounded-full text-[10px] font-bold">#BIO</span>
+</div>
+</div>
+</div>
+</section>
+<!-- Center: Knowledge Graph (65%) -->
+<section class="w-[65%] h-full relative overflow-hidden bg-white">
+<!-- Graph Visualization (Mockup) -->
+<div class="absolute inset-0 z-0">
+<svg class="pointer-events-none" height="100%" viewbox="0 0 800 600" width="100%">
+<!-- Connections -->
+<line stroke="#E5E7EB" stroke-width="1.5" x1="200" x2="400" y1="200" y2="300"></line>
+<line stroke="#E5E7EB" stroke-width="1.5" x1="400" x2="350" y1="300" y2="450"></line>
+<line stroke="#E5E7EB" stroke-width="1.5" x1="400" x2="550" y1="300" y2="250"></line>
+<line stroke="#E5E7EB" stroke-width="1.5" x1="550" x2="600" y1="250" y2="400"></line>
+<!-- Pulsing Path to Chat Area (Bottom Right) -->
+<path class="animate-pulse-line" d="M 400 300 Q 550 450 700 520" fill="none" stroke="url(#gradient-flow)" stroke-dasharray="8,4" stroke-width="2"></path>
+<path class="animate-pulse-line" d="M 550 250 Q 650 350 720 500" fill="none" stroke="url(#gradient-flow)" stroke-dasharray="8,4" stroke-width="2"></path>
+<defs>
+<lineargradient id="gradient-flow" x1="0%" x2="100%" y1="0%" y2="100%">
+<stop offset="0%" stop-color="#0040df"></stop>
+<stop offset="100%" stop-color="#731be5"></stop>
+</lineargradient>
+</defs>
+</svg>
+<!-- Interactive Nodes -->
+<div class="absolute top-[180px] left-[180px] group">
+<div class="w-12 h-12 rounded-full bg-primary flex items-center justify-center text-white node-glow-blue cursor-pointer transition-transform hover:scale-110 z-10 relative">
+<span class="material-symbols-outlined text-[20px]" data-icon="psychology">psychology</span>
+</div>
+<div class="absolute top-full left-1/2 -translate-x-1/2 mt-2 bg-white/90 backdrop-blur px-3 py-1 rounded-full shadow-lg border border-outline-variant/30 text-[10px] font-bold whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">Neural Networks</div>
+</div>
+<div class="absolute top-[280px] left-[380px] group">
+<div class="w-16 h-16 rounded-full bg-secondary flex items-center justify-center text-white node-glow-purple cursor-pointer transition-transform hover:scale-110 z-10 relative">
+<span class="material-symbols-outlined text-[28px]" data-icon="auto_awesome">auto_awesome</span>
+</div>
+<div class="absolute top-full left-1/2 -translate-x-1/2 mt-2 bg-white/90 backdrop-blur px-3 py-1 rounded-full shadow-lg border border-outline-variant/30 text-[10px] font-bold whitespace-nowrap">Core Intelligence</div>
+</div>
+<div class="absolute top-[230px] left-[530px] group">
+<div class="w-10 h-10 rounded-full bg-tertiary flex items-center justify-center text-white node-glow-orange cursor-pointer transition-transform hover:scale-110 z-10 relative">
+<span class="material-symbols-outlined text-[18px]" data-icon="data_object">data_object</span>
+</div>
+<div class="absolute top-full left-1/2 -translate-x-1/2 mt-2 bg-white/90 backdrop-blur px-3 py-1 rounded-full shadow-lg border border-outline-variant/30 text-[10px] font-bold whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">Data Points</div>
+</div>
+<div class="absolute top-[380px] left-[580px] group">
+<div class="w-12 h-12 rounded-full bg-primary-container flex items-center justify-center text-on-primary-container border-2 border-primary node-glow-blue cursor-pointer transition-transform hover:scale-110 z-10 relative">
+<span class="material-symbols-outlined text-[20px]" data-icon="hub">hub</span>
+</div>
+<div class="absolute top-full left-1/2 -translate-x-1/2 mt-2 bg-white/90 backdrop-blur px-3 py-1 rounded-full shadow-lg border border-outline-variant/30 text-[10px] font-bold whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">Synapse Alpha</div>
+</div>
+</div>
+<!-- Floating Interaction Controls (Bottom Left of Canvas) -->
+<div class="absolute bottom-8 left-8 flex gap-2">
+<button class="w-10 h-10 rounded-lg glass border border-outline-variant/50 flex items-center justify-center shadow-lg hover:bg-white transition-all"><span class="material-symbols-outlined text-on-surface" data-icon="zoom_in">zoom_in</span></button>
+<button class="w-10 h-10 rounded-lg glass border border-outline-variant/50 flex items-center justify-center shadow-lg hover:bg-white transition-all"><span class="material-symbols-outlined text-on-surface" data-icon="zoom_out">zoom_out</span></button>
+<button class="w-10 h-10 rounded-lg glass border border-outline-variant/50 flex items-center justify-center shadow-lg hover:bg-white transition-all"><span class="material-symbols-outlined text-on-surface" data-icon="center_focus_strong">center_focus_strong</span></button>
+</div>
+</section>
+<!-- Floating Chat Window (Bottom Right) -->
+<div class="fixed bottom-6 right-6 w-[420px] h-[520px] glass border border-primary/20 rounded-2xl shadow-2xl z-50 flex flex-col overflow-hidden transition-all duration-300" id="chat-window">
+<!-- Chat Header -->
+<div class="p-4 bg-primary text-on-primary flex items-center justify-between">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[20px]" data-icon="smart_toy">smart_toy</span>
+<span class="font-headline-sm text-headline-sm">Aethelgard AI</span>
+</div>
+<div class="flex items-center gap-3">
+<div class="flex items-center bg-white/10 px-2 py-1 rounded text-[10px] font-bold animate-pulse">
+<span class="mr-1">🔭</span> EXTERNAL SEARCH ACTIVE
+                    </div>
+<button class="opacity-70 hover:opacity-100"><span class="material-symbols-outlined text-[18px]" data-icon="close">close</span></button>
+</div>
+</div>
+<!-- Chat Content -->
+<div class="flex-1 overflow-y-auto p-4 space-y-4">
+<div class="flex gap-3">
+<div class="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+<span class="material-symbols-outlined text-primary text-[18px]" data-icon="smart_toy">smart_toy</span>
+</div>
+<div class="bg-white p-3 rounded-xl rounded-tl-none border border-outline-variant/30 text-body-md shadow-sm">
+                        I'm currently synthesizing information from the nodes "Neural Plasticity" and "Synaptic Weighting." I found some external research that bridges these two concepts.
+                    </div>
+</div>
+<div class="flex gap-3 justify-end">
+<div class="bg-primary/5 p-3 rounded-xl rounded-tr-none border border-primary/20 text-body-md shadow-sm max-w-[80%]">
+                        How does dopamine affect the weighting of those neural pathways?
+                    </div>
+</div>
+<div class="flex gap-3">
+<div class="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+<span class="material-symbols-outlined text-primary text-[18px]" data-icon="smart_toy">smart_toy</span>
+</div>
+<div class="bg-white p-3 rounded-xl rounded-tl-none border border-primary/20 text-body-md shadow-sm border-l-4 border-l-secondary relative">
+<div class="flex items-center gap-1 text-secondary font-bold text-[10px] mb-1">
+<span class="material-symbols-outlined text-[12px]" data-icon="link">link</span> SYNTHESIZING...
+                        </div>
+                        Dopamine serves as a reinforcement signal, effectively "tagging" specific synapses for long-term potentiation (LTP). This increases the synaptic weight during learning events.
+                    </div>
+</div>
+</div>
+<!-- Sources Tray -->
+<div class="px-4 py-2 bg-surface-container-low border-t border-outline-variant/30">
+<p class="text-[9px] font-bold text-outline uppercase mb-2">Sources Found (5)</p>
+<div class="flex gap-2 overflow-x-auto pb-1">
+<div class="shrink-0 w-8 h-8 rounded bg-tertiary-fixed flex items-center justify-center shadow-sm cursor-pointer hover:scale-110 transition-transform">
+<span class="material-symbols-outlined text-on-tertiary-fixed text-[16px]" data-icon="article">article</span>
+</div>
+<div class="shrink-0 w-8 h-8 rounded bg-primary-fixed flex items-center justify-center shadow-sm cursor-pointer hover:scale-110 transition-transform">
+<span class="material-symbols-outlined text-on-primary-fixed text-[16px]" data-icon="menu_book">menu_book</span>
+</div>
+<div class="shrink-0 w-8 h-8 rounded bg-secondary-fixed flex items-center justify-center shadow-sm cursor-pointer hover:scale-110 transition-transform">
+<span class="material-symbols-outlined text-on-secondary-fixed text-[16px]" data-icon="description">description</span>
+</div>
+<div class="shrink-0 w-8 h-8 rounded bg-tertiary-fixed flex items-center justify-center shadow-sm cursor-pointer hover:scale-110 transition-transform">
+<span class="material-symbols-outlined text-on-tertiary-fixed text-[16px]" data-icon="public">public</span>
+</div>
+<div class="shrink-0 w-8 h-8 rounded bg-primary-fixed flex items-center justify-center shadow-sm cursor-pointer hover:scale-110 transition-transform border-2 border-primary animate-bounce">
+<span class="material-symbols-outlined text-on-primary-fixed text-[16px]" data-icon="new_releases">new_releases</span>
+</div>
+</div>
+</div>
+<!-- Chat Input -->
+<div class="p-4 bg-white border-t border-outline-variant/30">
+<div class="flex items-center gap-2">
+<input class="flex-1 border-none focus:ring-0 text-body-md placeholder:text-outline p-0" placeholder="Ask your Second Brain..." type="text"/>
+<button class="w-8 h-8 bg-primary text-on-primary rounded-full flex items-center justify-center shadow-md">
+<span class="material-symbols-outlined text-[18px]" data-icon="arrow_upward">arrow_upward</span>
+</button>
+</div>
+</div>
+</div>
+</main>
+<!-- Micro-interaction Script -->
+<script>
+        // Simple Draggable Logic for the Chat Window
+        const chatWindow = document.getElementById('chat-window');
+        let isDragging = false;
+        let currentX;
+        let currentY;
+        let initialX;
+        let initialY;
+        let xOffset = 0;
+        let yOffset = 0;
+
+        chatWindow.addEventListener('mousedown', dragStart);
+        document.addEventListener('mousemove', drag);
+        document.addEventListener('mouseup', dragEnd);
+
+        function dragStart(e) {
+            // Only drag if clicking the header
+            if (e.target.closest('.bg-primary')) {
+                initialX = e.clientX - xOffset;
+                initialY = e.clientY - yOffset;
+                isDragging = true;
+            }
+        }
+
+        function drag(e) {
+            if (isDragging) {
+                e.preventDefault();
+                currentX = e.clientX - initialX;
+                currentY = e.clientY - initialY;
+                xOffset = currentX;
+                yOffset = currentY;
+                setTranslate(currentX, currentY, chatWindow);
+            }
+        }
+
+        function setTranslate(xPos, yPos, el) {
+            el.style.transform = `translate3d(${xPos}px, ${yPos}px, 0)`;
+        }
+
+        function dragEnd(e) {
+            isDragging = false;
+        }
+
+        // Atmosphere: Random pulse for nodes
+        setInterval(() => {
+            const nodes = document.querySelectorAll('.node-glow-blue, .node-glow-purple, .node-glow-orange');
+            const randomNode = nodes[Math.floor(Math.random() * nodes.length)];
+            randomNode.classList.add('scale-110');
+            setTimeout(() => randomNode.classList.remove('scale-110'), 600);
+        }, 4000);
+    </script>
+</body></html>
