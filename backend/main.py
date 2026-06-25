@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 
 # Set vault path
-VAULT_DIR = "G:\\내 드라이브\\agent-guru\\agent-guru"
+VAULT_DIR = os.environ.get("VAULT_DIR", "G:\\내 드라이브\\agent-guru\\agent-guru")
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 
 sys.path.append(BACKEND_DIR)
@@ -106,7 +106,7 @@ def get_document_detail(path: str):
         raise HTTPException(status_code=500, detail=f"Failed to read file: {e}")
 
 @app.post("/api/chat")
-def chat_endpoint(payload: QueryModel):
+async def chat_endpoint(payload: QueryModel):
     """
     SSE Streaming endpoint triggering the Fable-5 Agentic Harness loop.
     """
@@ -122,6 +122,7 @@ def chat_endpoint(payload: QueryModel):
     print(f"[DEBUG-PAYLOAD] Chat History Detail: {chat_history}")
     sys.stdout.flush()
     
+    # Since agent_harness.generate_agent_loop is an async generator, we pass it directly to StreamingResponse
     return StreamingResponse(
         agent_harness.generate_agent_loop(
             query, 
@@ -130,8 +131,24 @@ def chat_endpoint(payload: QueryModel):
             chat_history=chat_history,
             is_modification_mode=is_modification_mode
         ), 
-        media_type="text/event-stream"
     )
+
+class SearchApprovalModel(BaseModel):
+    request_id: str
+    approved: bool
+
+@app.post("/api/chat/approve_search")
+async def approve_search(payload: SearchApprovalModel):
+    request_id = payload.request_id
+    approved = payload.approved
+    
+    if request_id in agent_harness.active_search_approvals:
+        approval_dict = agent_harness.active_search_approvals[request_id]
+        approval_dict["approved"] = approved
+        approval_dict["event"].set()
+        return {"status": "success", "message": f"Search request {request_id} has been {'approved' if approved else 'rejected'}."}
+    else:
+        raise HTTPException(status_code=404, detail="Active search approval request not found or already processed.")
 
 @app.post("/api/documents/publish")
 def publish_document(payload: PublishModel):
@@ -250,5 +267,8 @@ def improve_endpoint(payload: ImproveModel):
 
 if __name__ == "__main__":
     import uvicorn
-    print("Starting Agent-Guru API server...")
-    uvicorn.run("main:app", host="127.0.0.1", port=8080, reload=True)
+    host = os.environ.get("HOST", "127.0.0.1")
+    port = int(os.environ.get("PORT", 8080))
+    print(f"Starting Agent-Guru API server on {host}:{port}...")
+    uvicorn.run("main:app", host=host, port=port, reload=True)
+

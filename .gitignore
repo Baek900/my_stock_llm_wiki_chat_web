@@ -23,3 +23,13 @@ dist-ssr/
 *.njsproj
 *.sln
 *.sw?
+
+# Vite cache
+.vite/
+frontend/.vite/
+
+# Local DB / caches
+*.db
+chroma_db/
+db_cache/
+

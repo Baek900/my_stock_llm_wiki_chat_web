@@ -3,6 +3,7 @@
 @tailwind utilities;
 
 :root {
+  --font-scale: 1.0;
   --sans: "Inter", system-ui, -apple-system, sans-serif;
   --heading: "Inter", system-ui, -apple-system, sans-serif;
   --mono: "JetBrains Mono", monospace;
@@ -34,9 +35,9 @@
 }
 
 :root.dark {
-  --color-primary: #4d7cff;
+  --color-primary: #5c8aff;
   --color-on-primary: #fff;
-  --color-primary-container: #1a3db3;
+  --color-primary-container: #153299;
   --color-on-primary-container: #e0e6ff;
   --color-secondary: #00c2ff;
   --color-on-secondary: #003547;
@@ -46,18 +47,18 @@
   --color-on-tertiary: #fff;
   --color-tertiary-container: #4f1fb3;
   --color-on-tertiary-container: #f0e8ff;
-  --color-background: #0b0b0c;
-  --color-on-background: #f3f4f6;
-  --color-surface: #121214;
-  --color-on-surface: #f3f4f6;
-  --color-on-surface-variant: #9ca3af;
-  --color-surface-container-lowest: #080809;
-  --color-surface-container-low: #101012;
-  --color-surface-container: #18181b;
-  --color-surface-container-high: #202024;
-  --color-surface-container-highest: #28282e;
-  --color-outline: #4b5563;
-  --color-outline-variant: #374151;
+  --color-background: #09090a;
+  --color-on-background: #e2e8f0;
+  --color-surface: #101012;
+  --color-on-surface: #e2e8f0;
+  --color-on-surface-variant: #94a3b8;
+  --color-surface-container-lowest: #060607;
+  --color-surface-container-low: #0c0c0e;
+  --color-surface-container: #141417;
+  --color-surface-container-high: #1c1c20;
+  --color-surface-container-highest: #242429;
+  --color-outline: #475569;
+  --color-outline-variant: #1e293b; /* Lower border contrast for dark mode */
 }
 
 body {
@@ -65,6 +66,7 @@ body {
   background-color: var(--color-background);
   color: var(--color-on-background);
   margin: 0;
+  font-size: calc(14px * var(--font-scale, 1.0));
 }
 
 .glass {
@@ -176,41 +178,43 @@ body {
   animation: 3s linear infinite pulse-line;
 }
 .node-glow-blue {
-  filter: drop-shadow(0 0 8px rgba(0, 64, 223, 0.4));
+  filter: drop-shadow(0 0 5px rgba(0, 64, 223, 0.25)); /* Lower neon glow radius */
 }
 .node-glow-purple {
-  filter: drop-shadow(0 0 8px rgba(115, 27, 229, 0.4));
+  filter: drop-shadow(0 0 5px rgba(115, 27, 229, 0.25));
 }
 .node-glow-orange {
-  filter: drop-shadow(0 0 8px rgba(138, 63, 0, 0.4));
+  filter: drop-shadow(0 0 5px rgba(138, 63, 0, 0.25));
 }
 .markdown-body {
-  font-size: 15px;
-  line-height: 1.6;
+  font-size: calc(14.5px * var(--font-scale, 1.0)) !important;
+  line-height: 1.75; /* Increased line height for relaxed reading */
+  letter-spacing: -0.01em;
 }
 .markdown-body h1 {
   border-bottom: 1px solid var(--color-outline-variant);
-  margin-top: 24px;
-  margin-bottom: 16px;
-  padding-bottom: 8px;
-  font-size: 1.8em;
-  font-weight: 700;
+  margin-top: 32px;
+  margin-bottom: 18px;
+  padding-bottom: 10px;
+  font-size: 1.75em;
+  font-weight: 800;
 }
 .markdown-body h2 {
-  margin-top: 20px;
-  margin-bottom: 12px;
-  font-size: 1.4em;
-  font-weight: 600;
+  margin-top: 28px;
+  margin-bottom: 14px;
+  font-size: 1.35em;
+  font-weight: 700;
 }
 .markdown-body h3 {
-  margin-top: 16px;
-  margin-bottom: 8px;
+  margin-top: 22px;
+  margin-bottom: 10px;
   font-size: 1.1em;
-  font-weight: 600;
+  font-weight: 700;
 }
 .markdown-body p {
-  margin-bottom: 16px;
+  margin-bottom: 20px; /* Relaxed paragraph space */
 }
+
 .markdown-body ul {
   margin-bottom: 16px;
   padding-left: 24px;
@@ -268,4 +272,24 @@ body {
   margin-bottom: 16px;
   padding-left: 16px;
   font-style: italic;
+}
+
+/* Custom UI Font Scaling Overrides */
+.markdown-body th, .markdown-body td {
+  font-size: calc(14px * var(--font-scale, 1.0)) !important;
+}
+.markdown-body p, .markdown-body li, .markdown-body a, .markdown-body code {
+  font-size: 1em !important;
+}
+#floating-chat {
+  font-size: calc(13px * var(--font-scale, 1.0)) !important;
+}
+aside {
+  font-size: calc(13px * var(--font-scale, 1.0)) !important;
+}
+header input {
+  font-size: calc(12px * var(--font-scale, 1.0)) !important;
+}
+.sidebar-text, nav button span {
+  font-size: calc(14px * var(--font-scale, 1.0)) !important;
 }

@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    volumes:
+      # Mount the Google Drive Obsidian Vault to /vault inside the container
+      - "G:\\내 드라이브\\agent-guru\\agent-guru:/vault"
+    environment:
+      - VAULT_DIR=/vault
+      - HOST=0.0.0.0
+      - PORT=8080
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    restart: always
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: always

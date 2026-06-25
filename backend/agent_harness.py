@@ -7,6 +7,8 @@ import time
 import urllib.request
 import urllib.parse
 from datetime import datetime
+import asyncio
+
 
 # Explicitly point to the Google Drive Obsidian Vault directory
 VAULT_DIR = "G:\\내 드라이브\\agent-guru\\agent-guru"
@@ -39,14 +41,66 @@ def log(msg):
     print(f"[{timestamp}] [AGENT-HARNESS] {msg}")
     sys.stdout.flush()
 
-def query_local_model_sync(prompt, temperature=0.2, model_mode="local"):
+# Global dictionary to track active search approvals: {request_id: {"event": asyncio.Event(), "approved": bool}}
+active_search_approvals = {}
+
+async def request_search_approval(query, model_mode):
     """
-    Helper to run a quick non-streaming completion for classification or evaluation.
+    Suspends execution to wait for user's search approval.
+    Returns: (approved, list_of_sse_events)
     """
-    model_mode = "local"
+    request_id = f"req_{int(time.time() * 1000)}"
+    event = asyncio.Event()
+    active_search_approvals[request_id] = {
+        "event": event,
+        "approved": None
+    }
+    
+    events = [
+        sse_yield({"type": "search_approval_required", "request_id": request_id, "query": query}),
+        sse_yield({"type": "thought", "text": f"👤 사용자의 웹 검색 승인을 기다리고 있습니다... (검색어: '{query}')"})
+    ]
+    
+    # Wait for the event (set by main.py endpoint)
+    await event.wait()
+    
+    approval_data = active_search_approvals.pop(request_id, {})
+    approved = approval_data.get("approved", False)
+    
+    if approved:
+        events.append(sse_yield({"type": "thought", "text": "✅ 웹 검색 승인됨. DuckDuckGo 실시간 검색을 수행합니다."}))
+    else:
+        events.append(sse_yield({"type": "thought", "text": "❌ 웹 검색 거부됨. 기존 지식만으로 답변을 합성합니다."}))
+        
+    return approved, events
+
+
+async def query_local_model_sync(prompt, temperature=0.2, model_mode="local", target_model=None):
+    """
+    Helper to run a quick non-streaming completion asynchronously in a thread pool.
+    """
+    is_cloud = (model_mode in ["cloud", "turbo"])
     messages = [{"role": "user", "content": prompt}]
-    force_local = True
-    return local_llm.generate_chat_completion(MODEL_NAME, messages, temperature=temperature, force_local=force_local, direct_local=True)
+    
+    if not target_model:
+        if is_cloud:
+            if model_mode == "turbo":
+                target_model = "gemini-3.1-pro"
+            else:
+                target_model = "gemini-3.1-flash-lite"
+        else:
+            target_model = MODEL_NAME
+            
+    # Run the blocking network/local LLM call in a background thread to keep event loop free
+    res = await asyncio.to_thread(
+        local_llm.generate_chat_completion,
+        target_model,
+        messages,
+        temperature=temperature,
+        force_local=not is_cloud,
+        direct_local=not is_cloud
+    )
+    return res
 
 def clean_json_string(output_text):
     """
@@ -242,7 +296,7 @@ def sse_yield(data_dict):
     """
     return f"data: {json.dumps(data_dict, ensure_ascii=False)}\n\n"
 
-def save_report_to_wiki(query, full_response, local_refs=None, web_refs=None, draft_path=None, model_mode="cloud"):
+async def save_report_to_wiki(query, full_response, local_refs=None, web_refs=None, draft_path=None, model_mode="cloud"):
     """
     Saves the comprehensive report to knowledge/drafts/YYYY-MM-DD_HHMMSS-요약문장.md
     Appends reference links at the bottom. Overwrites existing draft if draft_path is provided.
@@ -263,7 +317,7 @@ def save_report_to_wiki(query, full_response, local_refs=None, web_refs=None, dr
     
     출력 (설명 없이 오직 파일명으로 쓸 단어만 반환):
     """
-    summary_text = query_local_model_sync(summary_prompt, temperature=0.1, model_mode=model_mode)
+    summary_text = await query_local_model_sync(summary_prompt, temperature=0.1, model_mode=model_mode)
     if summary_text:
         summary_text = summary_text.strip().replace(" ", "_")
         summary_text = re.sub(r'[\\/*?:"<>| \r\n\t`\'".,]', '', summary_text)
@@ -330,7 +384,7 @@ def save_report_to_wiki(query, full_response, local_refs=None, web_refs=None, dr
         print(f"Error saving report to wiki: {e}")
         return None, None
 
-def generate_chat_summary(query, full_response, model_mode="cloud"):
+async def generate_chat_summary(query, full_response, model_mode="cloud"):
     """
     Generates a concise chat summary (150 chars approx) of the detailed report.
     """
@@ -345,7 +399,7 @@ def generate_chat_summary(query, full_response, model_mode="cloud"):
     
     요약문:
     """
-    summary = query_local_model_sync(summary_prompt, temperature=0.3, model_mode=model_mode)
+    summary = await query_local_model_sync(summary_prompt, temperature=0.3, model_mode=model_mode)
     if summary:
         return summary.strip()
     return "리서치 보고서 생성이 완료되었습니다. 상세한 내용은 우측 문서 창에서 확인하실 수 있습니다."
@@ -510,7 +564,7 @@ def get_latest_industry_report():
     except Exception:
         return ""
 
-def generate_guru_portfolio_loop(query, guru_names, model_mode="cloud", draft_path=None, is_modification_mode=False, chat_history=None):
+async def generate_guru_portfolio_loop(query, guru_names, model_mode="cloud", draft_path=None, is_modification_mode=False, chat_history=None):
     if isinstance(guru_names, str):
         guru_names = [guru_names]
         
@@ -559,14 +613,14 @@ def generate_guru_portfolio_loop(query, guru_names, model_mode="cloud", draft_pa
     search_results = []
     web_refs = []
     try:
-        market_res = web_searcher.search_web("today US stock market trend SP500 nasdaq", limit=3)
+        market_res = await asyncio.to_thread(web_searcher.search_web, "today US stock market trend SP500 nasdaq", limit=3)
         if market_res:
             search_results.append("### 실시간 글로벌 시황 동향:\n" + "\n".join([f"- {r['title']}: {r['snippet']}" for r in market_res]))
             for r in market_res:
                 web_refs.append((r['title'], r['url']))
         
         for ticker in screened_tickers[:3]:
-            ticker_res = web_searcher.search_web(f"{ticker} stock price today live news", limit=2)
+            ticker_res = await asyncio.to_thread(web_searcher.search_web, f"{ticker} stock price today live news", limit=2)
             if ticker_res:
                 search_results.append(f"### {ticker} 실시간 주가 및 뉴스:\n" + "\n".join([f"- {r['title']}: {r['snippet']}" for r in ticker_res]))
                 for r in ticker_res:
@@ -664,7 +718,7 @@ def generate_guru_portfolio_loop(query, guru_names, model_mode="cloud", draft_pa
         prompt += f"\n\n[사용자 지정 추가 규칙]\n{custom_rules}"
 
     try:
-        load_success = local_llm.load_model(MODEL_NAME)
+        load_success = await asyncio.to_thread(local_llm.load_model, MODEL_NAME)
         if not load_success:
             yield sse_yield({"type": "status", "status": "error", "message": "로컬 모델 구동에 실패했습니다. 서버 상태를 점검해 주세요."})
             return
@@ -679,7 +733,7 @@ def generate_guru_portfolio_loop(query, guru_names, model_mode="cloud", draft_pa
         messages.append({"role": "user", "content": query})
         
         full_response = ""
-        for chunk_type, chunk_text in generate_streaming_completion(messages, model_mode=model_mode):
+        async for chunk_type, chunk_text in generate_streaming_completion(messages, model_mode=model_mode):
             if chunk_text:
                 if chunk_type == "content":
                     full_response += chunk_text
@@ -690,7 +744,7 @@ def generate_guru_portfolio_loop(query, guru_names, model_mode="cloud", draft_pa
         # Step 5: Save report to drafts wiki and record to history
         yield sse_yield({"type": "thought", "text": "5단계: 최종 리서치 보고서를 임시 드래프트 폴더에 저장하고 있습니다..."})
         local_refs = screened_tickers
-        saved_path, report_title = save_report_to_wiki(query, full_response, local_refs, web_refs, draft_path, model_mode=model_mode)
+        saved_path, report_title = await save_report_to_wiki(query, full_response, local_refs, web_refs, draft_path, model_mode=model_mode)
         if saved_path:
             yield sse_yield({"type": "report_path", "path": saved_path, "title": report_title})
             
@@ -698,7 +752,7 @@ def generate_guru_portfolio_loop(query, guru_names, model_mode="cloud", draft_pa
         
         # Step 6: Generate and stream chat summary
         yield sse_yield({"type": "thought", "text": "6단계: 최종 리서치 답변을 요약하여 채팅 창에 출력하고 있습니다..."})
-        chat_summary = generate_chat_summary(query, full_response, model_mode=model_mode)
+        chat_summary = await generate_chat_summary(query, full_response, model_mode=model_mode)
         
         chunk_size = 10
         for i in range(0, len(chat_summary), chunk_size):
@@ -712,7 +766,7 @@ def generate_guru_portfolio_loop(query, guru_names, model_mode="cloud", draft_pa
         except Exception:
             pass
 
-def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_history=None, is_modification_mode=False):
+async def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_history=None, is_modification_mode=False):
     """
     Generator implementing the Fable-5 Agentic Harness loop.
     Yields JSON events for SSE stream.
@@ -759,7 +813,7 @@ def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_history
     """
     
     try:
-        class_out = query_local_model_sync(classify_prompt, temperature=0.1, model_mode=model_mode)
+        class_out = await query_local_model_sync(classify_prompt, temperature=0.1, model_mode=model_mode)
         classification = clean_json_string(class_out)
     except Exception:
         classification = {"category": "deep_research"}
@@ -842,10 +896,10 @@ def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_history
                 matched_gurus.append(guru_name)
                 
         if matched_gurus:
-            for event in generate_guru_portfolio_loop(query, matched_gurus, model_mode, draft_path, is_modification_mode=is_modification_mode, chat_history=chat_history):
+            async for event in generate_guru_portfolio_loop(query, matched_gurus, model_mode, draft_path, is_modification_mode=is_modification_mode, chat_history=chat_history):
                 yield event
             return
-        else:
+        elif len(query.strip()) < 8:
             yield sse_yield({"type": "thought", "text": "구루 포트폴리오 분석 모드 감지됨. 대상 구루 확인 중..."})
             yield sse_yield({
                 "type": "content",
@@ -853,15 +907,19 @@ def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_history
             })
             return
 
-    
-    yield sse_yield({"type": "thought", "text": "로컬 LLM 서버에 연결하고 컨텍스트 메모리를 준비하고 있습니다..."})
+    is_cloud = (model_mode in ["cloud", "turbo"])
+    if is_cloud:
+        mode_label = "Turbo" if model_mode == "turbo" else "Cloud"
+        yield sse_yield({"type": "thought", "text": f"클라우드 Antigravity API 연결({mode_label} 모드)을 활성화하고 계획을 수립하고 있습니다..."})
+    else:
+        yield sse_yield({"type": "thought", "text": "로컬 LLM 서버에 연결하고 컨텍스트 메모리를 준비하고 있습니다..."})
     
     try:
-        # Safe loading via local_llm load_model (this will acquire the lock file temporarily)
-        load_success = local_llm.load_model(MODEL_NAME)
-        if not load_success:
-            yield sse_yield({"type": "status", "status": "error", "message": "로컬 모델 구동에 실패했습니다. 서버 상태를 점검해 주세요."})
-            return
+        if not is_cloud:
+            load_success = await asyncio.to_thread(local_llm.load_model, MODEL_NAME)
+            if not load_success:
+                yield sse_yield({"type": "status", "status": "error", "message": "로컬 모델 구동에 실패했습니다. 서버 상태를 점검해 주세요."})
+                return
             
         # Step 1: Multi-Stage Planning & Local search (RAG)
         yield sse_yield({"type": "thought", "text": "1단계: 질문을 분석하고 의도 파악 및 다단계 지식 탐색 계획을 수립하고 있습니다..."})
@@ -889,7 +947,7 @@ def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_history
         }}
         """
         
-        plan_out = query_local_model_sync(planning_prompt, temperature=0.1, model_mode=model_mode)
+        plan_out = await query_local_model_sync(planning_prompt, temperature=0.1, model_mode=model_mode)
         plan_json = clean_json_string(plan_out)
         
         query_intent = plan_json.get("query_intent", "일반 정보 리서치")
@@ -899,11 +957,17 @@ def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_history
         
         # Collect unique search queries starting with the main query
         core_concepts = plan_json.get("core_concepts", [])
-        queries = [query]
-        for term in core_concepts + synonyms:
+        queries = []
+        for term in core_concepts:
             term = term.strip()
             if term and term.lower() not in [q.lower() for q in queries]:
                 queries.append(term)
+        for term in synonyms:
+            term = term.strip()
+            if term and term.lower() not in [q.lower() for q in queries]:
+                queries.append(term)
+        if query.strip() and query.strip().lower() not in [q.lower() for q in queries]:
+            queries.append(query.strip())
         queries = queries[:3]
 
         
@@ -928,87 +992,104 @@ def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_history
             yield sse_yield({"type": "thought", "text": f"쿼리 [{q_idx+1}/{len(queries)}] 실행 중: '{q}'"})
             
             # 1) Search local vault
-            local_results = search_engine.search_local_vault(q, limit=3)
+            local_results = await asyncio.to_thread(search_engine.search_local_vault, q, limit=3)
             
-            # Determine if local match score is low (< 150) or empty
+            # Determine if local match score is low (< 150), empty, or contains invalid/error content
             has_high_quality_match = False
             if local_results:
-                max_score = local_results[0]["score"]
-                if max_score >= 150:
+                best_res = local_results[0]
+                max_score = best_res["score"]
+                
+                snippet = best_res.get("snippet", "").strip()
+                is_error_content = any(err in snippet.lower() for err in ["404 not found", "http error", "error: http error", "exception occurred"])
+                is_too_short = len(snippet) < 100
+                
+                # Check if the query term or any synonyms/concepts actually appear in the snippet/body
+                search_terms = [q.lower()] + [s.lower() for s in synonyms if isinstance(s, str)] + [c.lower() for c in core_concepts if isinstance(c, str)]
+                search_terms = [t for t in search_terms if t]
+                term_in_body = any(t in snippet.lower() for t in search_terms)
+                
+                if max_score >= 150 and not is_error_content and not is_too_short and term_in_body:
                     has_high_quality_match = True
+                else:
+                    log(f"Local match '{best_res['title']}' rejected as high quality (score={max_score}, is_error={is_error_content}, too_short={is_too_short}, term_in_body={term_in_body})")
                     
             if not has_high_quality_match:
                 # 2) Fallback to External Flashlight Search
                 if web_search_count < max_web_searches:
-                    yield sse_yield({"type": "thought", "text": f"⚠️ 로컬 검색 매칭 부족 (매칭 점수 미달 또는 없음). 외부 실시간 웹 탐색(Flashlight Search) 실행: '{q}'"})
-                    
+                    approved, approval_events = await request_search_approval(q, model_mode)
+                    for ev in approval_events:
+                        yield ev
+                        
                     web_results = []
-                    try:
-                        web_results = web_searcher.search_web(q, limit=5)
-                    except Exception as e:
-                        pass
-                        
-                    web_search_count += 1
-                    
-                    if web_results:
-                        for r in web_results:
-                            web_refs.append((r['title'], r['url']))
-                            
-                        flashlight_result = "\n\n".join([f"Title: {r['title']}\nURL: {r['url']}\nSnippet: {r['snippet']}" for r in web_results])
-                        
-                        # 3) Generate new Wiki content from web results
-                        yield sse_yield({"type": "thought", "text": f"웹 RAG 정보 획득 완료. 지식 위키 자동 갱신 및 저장 중..."})
-                        
-                        wiki_prompt = f"""
-                        웹 검색 결과를 바탕으로, 이 정보를 Obsidian 지식 위키에 저장할 수 있도록 표준 형식의 마크다운 위키 페이지를 작성해 주세요.
-                        반드시 아래 YAML frontmatter 형식을 첫머리에 포함해야 하며, 텍스트 설명 외의 사설은 생략하세요.
-                        
-                        [웹 검색 자료]
-                        {flashlight_result}
-                        
-                        출력 형식 예시:
-                        ---
-                        type: knowledge-term
-                        category: Deep Tech (또는 Macroeconomics, AI 등 알맞은 카테고리)
-                        related_terms:
-                          - "[[관련개념1]]"
-                        tags:
-                          - knowledge/definition
-                          - concept/검색어
-                        ---
-                        # [개념명]
-                        
-                        ## 정의
-                        ...
-                        
-                        ## 주요 내용
-                        ...
-                        """
-                        
-                        wiki_content = query_local_model_sync(wiki_prompt, temperature=0.2, model_mode=model_mode)
-                        
-                        # Parse title to save
-                        title_match = re.search(r'^#\s+(.*)$', wiki_content, re.MULTILINE)
-                        concept_title = title_match.group(1).strip() if title_match else q
-                        concept_title = re.sub(r'[\\/*?:"<>|]', '', concept_title)
-                        
-                        wiki_path = os.path.join(VAULT_DIR, "knowledge", f"{concept_title}.md")
+                    if approved:
+                        yield sse_yield({"type": "thought", "text": f"⚠️ 로컬 검색 매칭 부족 (매칭 점수 미달 또는 없음). 외부 실시간 웹 탐색(Flashlight Search) 실행: '{q}'"})
                         try:
-                            os.makedirs(os.path.dirname(wiki_path), exist_ok=True)
-                            with open(wiki_path, "w", encoding="utf-8") as f:
-                                f.write(wiki_content)
-                            yield sse_yield({
-                                "type": "thought", 
-                                "text": f"새로운 위키 문서 생성 완료: [knowledge/{concept_title}.md](file:///{wiki_path.replace(chr(92), '/')})"
-                            })
+                            web_results = await asyncio.to_thread(web_searcher.search_web, q, limit=5)
+                        except Exception as e:
+                            pass
+                        
+                        web_search_count += 1
+                        
+                        if web_results:
+                            for r in web_results:
+                                web_refs.append((r['title'], r['url']))
+                                
+                            flashlight_result = "\n\n".join([f"Title: {r['title']}\nURL: {r['url']}\nSnippet: {r['snippet']}" for r in web_results])
                             
-                            # Force cache reload so it is indexable
-                            search_engine.update_document_cache(force=True)
+                            # 3) Generate new Wiki content from web results
+                            yield sse_yield({"type": "thought", "text": f"웹 RAG 정보 획득 완료. 지식 위키 자동 갱신 및 저장 중..."})
                             
-                            # Re-run local search for this query to get the newly created document
-                            local_results = search_engine.search_local_vault(q, limit=3)
-                        except Exception as ex:
-                            yield sse_yield({"type": "thought", "text": f"위키 문서 저장 실패: {ex}"})
+                            wiki_prompt = f"""
+                            웹 검색 결과를 바탕으로, 이 정보를 Obsidian 지식 위키에 저장할 수 있도록 표준 형식의 마크다운 위키 페이지를 작성해 주세요.
+                            반드시 아래 YAML frontmatter 형식을 첫머리에 포함해야 하며, 텍스트 설명 외의 사설은 생략하세요.
+                            
+                            [웹 검색 자료]
+                            {flashlight_result}
+                            
+                            출력 형식 예시:
+                            ---
+                            type: knowledge-term
+                            category: Deep Tech (또는 Macroeconomics, AI 등 알맞은 카테고리)
+                            related_terms:
+                              - "[[관련개념1]]"
+                            tags:
+                              - knowledge/definition
+                              - concept/검색어
+                            ---
+                            # [개념명]
+                            
+                            ## 정의
+                            ...
+                            
+                            ## 주요 내용
+                            ...
+                            """
+                            
+                            wiki_content = await query_local_model_sync(wiki_prompt, temperature=0.2, model_mode=model_mode)
+                            
+                            # Parse title to save
+                            title_match = re.search(r'^#\s+(.*)$', wiki_content, re.MULTILINE)
+                            concept_title = title_match.group(1).strip() if title_match else q
+                            concept_title = re.sub(r'[\\/*?:"<>|]', '', concept_title)
+                            
+                            wiki_path = os.path.join(VAULT_DIR, "knowledge", f"{concept_title}.md")
+                            try:
+                                os.makedirs(os.path.dirname(wiki_path), exist_ok=True)
+                                with open(wiki_path, "w", encoding="utf-8") as f:
+                                    f.write(wiki_content)
+                                yield sse_yield({
+                                    "type": "thought", 
+                                    "text": f"새로운 위키 문서 생성 완료: [knowledge/{concept_title}.md](file:///{wiki_path.replace(chr(92), '/')})"
+                                })
+                                
+                                # Force cache reload so it is indexable
+                                await asyncio.to_thread(search_engine.update_document_cache, force=True)
+                                
+                                # Re-run local search for this query to get the newly created document
+                                local_results = await asyncio.to_thread(search_engine.search_local_vault, q, limit=3)
+                            except Exception as ex:
+                                yield sse_yield({"type": "thought", "text": f"위키 문서 저장 실패: {ex}"})
                             
             # 4) Process and collect search results
             for r in local_results:
@@ -1108,7 +1189,7 @@ def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_history
         # Step 5: Save report to drafts wiki and record to history
         yield sse_yield({"type": "thought", "text": "5단계: 최종 리서치 보고서를 임시 드래프트 폴더에 저장하고 있습니다..."})
         local_refs = [doc["title"] for doc in matched_docs_info]
-        saved_path, report_title = save_report_to_wiki(query, full_response, local_refs, web_refs, draft_path, model_mode=model_mode)
+        saved_path, report_title = await save_report_to_wiki(query, full_response, local_refs, web_refs, draft_path, model_mode=model_mode)
         if saved_path:
             yield sse_yield({"type": "report_path", "path": saved_path, "title": report_title})
             
@@ -1116,7 +1197,7 @@ def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_history
         
         # Step 6: Generate and stream chat summary
         yield sse_yield({"type": "thought", "text": "6단계: 최종 리서치 답변을 요약하여 채팅 창에 출력하고 있습니다..."})
-        chat_summary = generate_chat_summary(query, full_response, model_mode=model_mode)
+        chat_summary = await generate_chat_summary(query, full_response, model_mode=model_mode)
         
         chunk_size = 10
         for i in range(0, len(chat_summary), chunk_size):
@@ -1138,7 +1219,7 @@ def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_history
           "suggested_rule": "에이전트가 앞으로 준수해야 할 정제된 가이드라인 한 줄 (예: '답변을 항상 세 줄 이내로 짧게 요약한다')"
         }}
         """
-        critique_out = query_local_model_sync(critique_prompt, temperature=0.1, model_mode=model_mode)
+        critique_out = await query_local_model_sync(critique_prompt, temperature=0.1, model_mode=model_mode)
         critique_json = clean_json_string(critique_out)
         
         if critique_json.get("feedback_detected", False) and critique_json.get("suggested_rule"):
@@ -1149,42 +1230,57 @@ def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_history
             })
             
     finally:
-        try:
-            local_llm.unload_model(MODEL_NAME)
-        except Exception:
-            pass
+        if not is_cloud:
+            try:
+                await asyncio.to_thread(local_llm.unload_model, MODEL_NAME)
+            except Exception:
+                pass
 
 
-def generate_streaming_completion(messages, temperature=0.3, max_tokens=8192, model_mode="local"):
+async def generate_streaming_completion(messages, temperature=0.3, max_tokens=8192, model_mode="local"):
     """
-    Tries Cloud API first (if model_mode == 'cloud'), and falls back to local Lemonade Server on failure.
+    Tries Cloud API first (if model_mode == 'cloud' or 'turbo'), and falls back to local Lemonade Server on failure.
     If model_mode == 'local', calls local model directly.
     """
-    model_mode = "local"
-    if model_mode == "local":
+    is_cloud = (model_mode in ["cloud", "turbo"])
+    if not is_cloud:
         log("Forcing direct local model completion...")
         try:
-            res = local_llm.generate_chat_completion(MODEL_NAME, messages, temperature=temperature, force_local=True, direct_local=True)
+            res = await asyncio.to_thread(
+                local_llm.generate_chat_completion,
+                MODEL_NAME,
+                messages,
+                temperature=temperature,
+                force_local=True,
+                direct_local=True
+            )
             if res:
                 chunk_size = 50
                 for i in range(0, len(res), chunk_size):
                     yield "content", res[i:i+chunk_size]
-                    time.sleep(0.01)
+                    await asyncio.sleep(0.01)
             else:
                 yield "content", "[로컬 모델 응답 오류: 응답이 비어 있음]"
         except Exception as e:
             yield "content", f"[로컬 모델 실행 에러: {e}]"
         return
 
-    # Cloud mode: try Cloud first
+    # Cloud/Turbo mode: try Cloud first
+    target_model = "gemini-3.1-pro" if model_mode == "turbo" else "gemini-3.5-flash"
     try:
-        log("Streaming: calling Antigravity Cloud API...")
-        res = local_llm.generate_chat_completion(MODEL_NAME, messages, temperature=temperature, force_local=False)
+        log(f"Streaming: calling Antigravity Cloud API (Model: {target_model})...")
+        res = await asyncio.to_thread(
+            local_llm.generate_chat_completion,
+            target_model,
+            messages,
+            temperature=temperature,
+            force_local=False
+        )
         if res:
             chunk_size = 50
             for i in range(0, len(res), chunk_size):
                 yield "content", res[i:i+chunk_size]
-                time.sleep(0.01)
+                await asyncio.sleep(0.01)
             return
         else:
             raise Exception("Cloud API response is empty")
@@ -1199,19 +1295,31 @@ def generate_streaming_completion(messages, temperature=0.3, max_tokens=8192, mo
             "max_tokens": max_tokens,
             "stream": True
         }
-        import urllib.request
-        data = json.dumps(payload).encode('utf-8')
-        req = urllib.request.Request(
-            "http://localhost:8000/v1/chat/completions",
-            data=data,
-            headers={"Content-Type": "application/json"}
-        )
+        
+        def call_lemonade_endpoint():
+            import urllib.request
+            data = json.dumps(payload).encode('utf-8')
+            req = urllib.request.Request(
+                "http://localhost:8000/v1/chat/completions",
+                data=data,
+                headers={"Content-Type": "application/json"}
+            )
+            try:
+                response = urllib.request.urlopen(req, timeout=10)
+                return response.read().decode('utf-8', errors='ignore')
+            except Exception as e:
+                return f"Error: {e}"
+                
         try:
-            response = urllib.request.urlopen(req, timeout=10)
-            for line in response:
-                line_str = line.decode('utf-8', errors='ignore')
-                if line_str.startswith("data: "):
-                    data_content = line_str[6:].strip()
+            # We run this sync web request in thread pool
+            response_text = await asyncio.to_thread(call_lemonade_endpoint)
+            if response_text.startswith("Error"):
+                raise Exception(response_text)
+                
+            # Parse lemonade server SSE chunks (line by line)
+            for line in response_text.splitlines():
+                if line.startswith("data: "):
+                    data_content = line[6:].strip()
                     if data_content == "[DONE]":
                         break
                     try:
