@@ -306,7 +306,17 @@ def save_report_to_wiki(query, full_response, local_refs=None, web_refs=None, dr
         "tags": ["research/report", f"concept/{summary_text}"]
     }
     
-    body_content = f"# {query}\n\n{full_response}\n\n## 🔗 참고 자료 및 출처\n"
+    # Strip any frontmatter if the LLM output accidentally contains one
+    _, clean_response = parse_frontmatter(full_response.strip())
+    clean_response = clean_response.strip()
+    
+    # Strip markdown code blocks if the model wrapped the entire response
+    if clean_response.startswith("```markdown") and clean_response.endswith("```"):
+        clean_response = clean_response[11:-3].strip()
+    elif clean_response.startswith("```") and clean_response.endswith("```"):
+        clean_response = clean_response[3:-3].strip()
+        
+    body_content = f"# {query}\n\n{clean_response}\n\n## 🔗 참고 자료 및 출처\n"
     if unique_local:
         body_content += "### 📂 내부 지식 문서\n"
         for doc in unique_local:
@@ -583,7 +593,8 @@ def generate_guru_portfolio_loop(query, guru_names, model_mode="cloud", draft_pa
     if draft_path and os.path.exists(draft_path):
         try:
             with open(draft_path, "r", encoding="utf-8", errors="ignore") as f:
-                draft_content = f.read()
+                raw_draft = f.read()
+                _, draft_content = parse_frontmatter(raw_draft)
         except:
             pass
 
@@ -1106,7 +1117,8 @@ def generate_agent_loop(query, model_mode="normal", draft_path=None, chat_histor
         if draft_path and os.path.exists(draft_path):
             try:
                 with open(draft_path, "r", encoding="utf-8", errors="ignore") as f:
-                    draft_content = f.read()
+                    raw_draft = f.read()
+                    _, draft_content = parse_frontmatter(raw_draft)
             except:
                 pass
 
