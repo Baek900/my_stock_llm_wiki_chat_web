@@ -32,6 +32,10 @@ def check_resource_busy():
     Checks if a scheduled/pipeline background task is using the local LLM lock.
     If the lock is held by another alive process, return True.
     """
+    import sys
+    if sys.platform != "win32":
+        return False
+        
     if os.path.exists(LOCK_FILE):
         try:
             with open(LOCK_FILE, "r") as f:

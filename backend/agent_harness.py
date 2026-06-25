@@ -9,10 +9,9 @@ import urllib.parse
 from datetime import datetime
 
 # Explicitly point to the Google Drive Obsidian Vault directory
-VAULT_DIR = "G:\\내 드라이브\\agent-guru\\agent-guru"
+VAULT_DIR = os.getenv("VAULT_DIR", "G:\\내 드라이브\\agent-guru\\agent-guru")
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
-SCRIPTS_DIR = os.path.join(VAULT_DIR, "workflow", "scripts")
-sys.path.append(SCRIPTS_DIR)
+sys.path.append(BACKEND_DIR)
 
 # Dynamically import scripts from vault workflow folder
 import local_llm
@@ -39,14 +38,14 @@ def log(msg):
     print(f"[{timestamp}] [AGENT-HARNESS] {msg}")
     sys.stdout.flush()
 
-def query_local_model_sync(prompt, temperature=0.2, model_mode="local"):
+def query_local_model_sync(prompt, temperature=0.2, model_mode="normal"):
     """
     Helper to run a quick non-streaming completion for classification or evaluation.
     """
-    model_mode = "local"
     messages = [{"role": "user", "content": prompt}]
-    force_local = True
-    return local_llm.generate_chat_completion(MODEL_NAME, messages, temperature=temperature, force_local=force_local, direct_local=True)
+    running_on_gcp = os.getenv("RUNNING_ON_GCP", "false").lower() == "true"
+    force_local = not running_on_gcp
+    return local_llm.generate_chat_completion(MODEL_NAME, messages, temperature=temperature, force_local=force_local, model_mode=model_mode)
 
 def clean_json_string(output_text):
     """
@@ -712,7 +711,7 @@ def generate_guru_portfolio_loop(query, guru_names, model_mode="cloud", draft_pa
         except Exception:
             pass
 
-def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_history=None, is_modification_mode=False):
+def generate_agent_loop(query, model_mode="normal", draft_path=None, chat_history=None, is_modification_mode=False, approved_searches=None):
     """
     Generator implementing the Fable-5 Agentic Harness loop.
     Yields JSON events for SSE stream.
@@ -922,15 +921,34 @@ def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_history
         matched_docs_info = []
         web_refs = []
         web_search_count = 0
-        max_web_searches = 2
+        max_web_searches = 4
         
+        # 1) Pre-scan queries to check which ones need web search fallback
+        queries_needing_web_search = []
+        for q in queries:
+            local_results = search_engine.search_local_vault(q, limit=3)
+            has_high_quality_match = False
+            if local_results:
+                if local_results[0]["score"] >= 150:
+                    has_high_quality_match = True
+            if not has_high_quality_match:
+                queries_needing_web_search.append(q)
+                
+        # 2) If we have queries needing web search, but user has not approved yet, yield approval request
+        if queries_needing_web_search and approved_searches is None:
+            yield sse_yield({
+                "type": "search_request",
+                "queries": queries_needing_web_search[:max_web_searches]
+            })
+            return
+            
+        # 3) Main query processing loop
         for q_idx, q in enumerate(queries):
             yield sse_yield({"type": "thought", "text": f"쿼리 [{q_idx+1}/{len(queries)}] 실행 중: '{q}'"})
             
-            # 1) Search local vault
+            # Search local vault
             local_results = search_engine.search_local_vault(q, limit=3)
             
-            # Determine if local match score is low (< 150) or empty
             has_high_quality_match = False
             if local_results:
                 max_score = local_results[0]["score"]
@@ -938,17 +956,19 @@ def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_history
                     has_high_quality_match = True
                     
             if not has_high_quality_match:
-                # 2) Fallback to External Flashlight Search
-                if web_search_count < max_web_searches:
-                    yield sse_yield({"type": "thought", "text": f"⚠️ 로컬 검색 매칭 부족 (매칭 점수 미달 또는 없음). 외부 실시간 웹 탐색(Flashlight Search) 실행: '{q}'"})
-                    
-                    web_results = []
-                    try:
-                        web_results = web_searcher.search_web(q, limit=5)
-                    except Exception as e:
-                        pass
+                # Check if this query was approved by the user
+                is_approved = approved_searches is not None and q in approved_searches
+                if is_approved:
+                    if web_search_count < max_web_searches:
+                        yield sse_yield({"type": "thought", "text": f"⚠️ 로컬 검색 매칭 부족. 외부 실시간 웹 탐색(승인됨) 실행: '{q}'"})
                         
-                    web_search_count += 1
+                        web_results = []
+                        try:
+                            web_results = web_searcher.search_web(q, limit=5)
+                        except Exception as e:
+                            pass
+                            
+                        web_search_count += 1
                     
                     if web_results:
                         for r in web_results:
@@ -963,13 +983,30 @@ def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_history
                         웹 검색 결과를 바탕으로, 이 정보를 Obsidian 지식 위키에 저장할 수 있도록 표준 형식의 마크다운 위키 페이지를 작성해 주세요.
                         반드시 아래 YAML frontmatter 형식을 첫머리에 포함해야 하며, 텍스트 설명 외의 사설은 생략하세요.
                         
+                        [카테고리 분류 규칙]
+                        frontmatter의 category 필드에는 다음 6개 공식 카테고리 중 하나만 지정하십시오:
+                        - Macroeconomics
+                        - Institutions
+                        - People
+                        - Tech Themes
+                        - Industries
+                        - Segments
+
+                        [신뢰도 태깅 규칙 (Andrej Karpathy llm-wiki)]
+                        본문 설명 내에 팩트나 수치가 서술될 때, 사실의 끝부분에 출처의 확실성에 맞춰 다음 신뢰도 태그 중 하나를 의무적으로 붙이십시오:
+                        - `[EXTRACTED]`: 원문 검색 결과에 직접적으로 명시된 확실한 사실
+                        - `[INFERRED]`: 논리적으로 추론된 유도된 사실
+                        - `[AMBIGUOUS]`: 원문의 서술이 모호하거나 충돌하는 모호한 내용
+                        - `[UNVERIFIED]`: 확인되지 않은 소문, 루머 또는 추정치
+                        예시: "엔비디아의 2026년 가동률은 98%에 달할 것으로 예상된다.[UNVERIFIED]"
+
                         [웹 검색 자료]
                         {flashlight_result}
                         
                         출력 형식 예시:
                         ---
                         type: knowledge-term
-                        category: Deep Tech (또는 Macroeconomics, AI 등 알맞은 카테고리)
+                        category: Tech Themes
                         related_terms:
                           - "[[관련개념1]]"
                         tags:
@@ -992,14 +1029,36 @@ def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_history
                         concept_title = title_match.group(1).strip() if title_match else q
                         concept_title = re.sub(r'[\\/*?:"<>|]', '', concept_title)
                         
-                        wiki_path = os.path.join(VAULT_DIR, "knowledge", f"{concept_title}.md")
+                        # Extract category from YAML frontmatter
+                        category_val = "Macroeconomics"
+                        cat_match = re.search(r'^category:\s*(.*)$', wiki_content, re.MULTILINE)
+                        if cat_match:
+                            category_val = cat_match.group(1).strip()
+
+                        # Determine category subfolder
+                        subfolder = "macro"
+                        cat_lower = category_val.lower()
+                        if "macro" in cat_lower or "economy" in cat_lower or "market" in cat_lower or "금융" in cat_lower or "금리" in cat_lower:
+                            subfolder = "macro"
+                        elif "people" in cat_lower or "person" in cat_lower or "인물" in cat_lower or "창립자" in cat_lower:
+                            subfolder = "people"
+                        elif "institution" in cat_lower or "company" in cat_lower or "기관" in cat_lower or "기업" in cat_lower or "org" in cat_lower:
+                            subfolder = "institutions"
+                        elif "tech" in cat_lower or "ai" in cat_lower or "기술" in cat_lower or "theme" in cat_lower or "과학" in cat_lower:
+                            subfolder = "tech_themes"
+                        elif "industry" in cat_lower or "산업" in cat_lower or "섹터" in cat_lower:
+                            subfolder = "industries"
+                        elif "segment" in cat_lower or "분야" in cat_lower or "부문" in cat_lower:
+                            subfolder = "segments"
+                        
+                        wiki_path = os.path.join(VAULT_DIR, "knowledge", subfolder, f"{concept_title}.md")
                         try:
                             os.makedirs(os.path.dirname(wiki_path), exist_ok=True)
                             with open(wiki_path, "w", encoding="utf-8") as f:
                                 f.write(wiki_content)
                             yield sse_yield({
                                 "type": "thought", 
-                                "text": f"새로운 위키 문서 생성 완료: [knowledge/{concept_title}.md](file:///{wiki_path.replace(chr(92), '/')})"
+                                "text": f"새로운 위키 문서 생성 완료: [knowledge/{subfolder}/{concept_title}.md](file:///{wiki_path.replace(chr(92), '/')})"
                             })
                             
                             # Force cache reload so it is indexable
@@ -1051,11 +1110,18 @@ def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_history
             except:
                 pass
 
+        custom_rules_part = f"[사용자 지정 추가 규칙]\n{custom_rules}" if custom_rules else ""
+        draft_update_part = f"[이전 초안 보고서 수정요청]\n귀하는 이미 작성된 초안 보고서를 바탕으로 사용자의 추가 요청사항을 반영하여 보고서를 갱신해야 합니다. 기존 내용을 최대한 보존하며 수정하십시오:\n{draft_content}" if draft_content else ""
+
         if draft_content:
             system_instruction = f"""
         당신은 글로벌 리서치 허브 에이전트 Agent-Guru입니다.
         사용자의 추가 수정/보완 요청에 따라, 아래 제공된 [컨텍스트 정보]를 참조하여 기존에 작성된 [기존 초안 보고서]의 내용을 **부분적으로 보충 및 수정**해 주세요.
         
+        [신뢰도 인지 지침 (Andrej Karpathy llm-wiki)]
+        컨텍스트 정보의 문장이나 팩트 뒤에 붙은 신뢰도 어노테이션 태그(`[EXTRACTED]`, `[INFERRED]`, `[AMBIGUOUS]`, `[UNVERIFIED]`)를 인지하여 답변에 반영하세요.
+        특히 `[UNVERIFIED]`(미검증) 또는 `[AMBIGUOUS]`(모호함) 정보가 포함되어 있다면, 답변 내에 해당 사실을 인용할 때 '이 정보는 아직 검증되지 않은 정보(UNVERIFIED)를 포함합니다' 또는 '출처가 모호한 사실(AMBIGUOUS)입니다'라는 경고/주의 문구를 명시적으로 부착해 주십시오.
+
         CRITICAL WARNING: 기존 보고서의 뼈대와 내용을 대량 삭제하거나 전면적으로 새로 작성(리팩토링)하지 마십시오!
         반드시 아래 3단계를 수행하여 수정해야 합니다:
         1. [수정사항 확인]: 사용자의 수정 요구 및 질문을 명확히 확인합니다.
@@ -1071,7 +1137,7 @@ def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_history
         [사용자의 추가 수정/보완 요청사항]
         {query}
         
-        {f'[사용자 지정 추가 규칙]\n{custom_rules}' if custom_rules else ''}
+        {custom_rules_part}
         """
         else:
             system_instruction = f"""
@@ -1082,9 +1148,13 @@ def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_history
         [컨텍스트 정보]
         {context_text}
         
-        {f'[사용자 지정 추가 규칙]\n{custom_rules}' if custom_rules else ''}
+        [신뢰도 인지 지침 (Andrej Karpathy llm-wiki)]
+        컨텍스트 정보의 문장이나 팩트 뒤에 붙은 신뢰도 어노테이션 태그(`[EXTRACTED]`, `[INFERRED]`, `[AMBIGUOUS]`, `[UNVERIFIED]`)를 인지하여 답변에 반영하세요.
+        특히 `[UNVERIFIED]`(미검증) 또는 `[AMBIGUOUS]`(모호함) 정보가 포함되어 있다면, 답변 내에 해당 사실을 인용할 때 '이 정보는 아직 검증되지 않은 정보(UNVERIFIED)를 포함합니다' 또는 '출처가 모호한 사실(AMBIGUOUS)입니다'라는 경고/주의 문구를 명시적으로 부착해 주십시오.
         
-        {f'[이전 초안 보고서 수정요청]\n귀하는 이미 작성된 초안 보고서를 바탕으로 사용자의 추가 요청사항을 반영하여 보고서를 갱신해야 합니다. 기존 내용을 최대한 보존하며 수정하십시오:\n{draft_content}' if draft_content else ''}
+        {custom_rules_part}
+        
+        {draft_update_part}
         """
         
         messages = [{"role": "system", "content": system_instruction}]
@@ -1155,16 +1225,17 @@ def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_history
             pass
 
 
-def generate_streaming_completion(messages, temperature=0.3, max_tokens=8192, model_mode="local"):
+def generate_streaming_completion(messages, temperature=0.3, max_tokens=8192, model_mode="normal"):
     """
-    Tries Cloud API first (if model_mode == 'cloud'), and falls back to local Lemonade Server on failure.
-    If model_mode == 'local', calls local model directly.
+    Tries Cloud API (if model_mode in ['normal', 'turbo'] or RUNNING_ON_GCP is True), and falls back to local Lemonade Server.
     """
-    model_mode = "local"
-    if model_mode == "local":
+    running_on_gcp = os.getenv("RUNNING_ON_GCP", "false").lower() == "true"
+    is_cloud = (model_mode in ["normal", "turbo"]) or running_on_gcp
+    
+    if not is_cloud:
         log("Forcing direct local model completion...")
         try:
-            res = local_llm.generate_chat_completion(MODEL_NAME, messages, temperature=temperature, force_local=True, direct_local=True)
+            res = local_llm.generate_chat_completion(MODEL_NAME, messages, temperature=temperature, force_local=True, model_mode=model_mode)
             if res:
                 chunk_size = 50
                 for i in range(0, len(res), chunk_size):
@@ -1178,8 +1249,8 @@ def generate_streaming_completion(messages, temperature=0.3, max_tokens=8192, mo
 
     # Cloud mode: try Cloud first
     try:
-        log("Streaming: calling Antigravity Cloud API...")
-        res = local_llm.generate_chat_completion(MODEL_NAME, messages, temperature=temperature, force_local=False)
+        log(f"Streaming: calling Cloud Gemini API with model_mode={model_mode}...")
+        res = local_llm.generate_chat_completion(MODEL_NAME, messages, temperature=temperature, force_local=False, model_mode=model_mode)
         if res:
             chunk_size = 50
             for i in range(0, len(res), chunk_size):
