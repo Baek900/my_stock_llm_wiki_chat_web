@@ -8,7 +8,7 @@ import database
 import vector_db
 
 # Explicitly point to the Google Drive Obsidian Vault directory for data
-VAULT_DIR = os.environ.get("VAULT_DIR", "G:\\내 드라이브\\agent-guru\\agent-guru")
+VAULT_DIR = os.getenv("VAULT_DIR", "G:\\내 드라이브\\agent-guru\\agent-guru")
 
 # Global document index cache to prevent slow disk reads on every keystroke
 doc_cache = []
@@ -54,11 +54,29 @@ def update_document_cache(force=False):
             return
             
     # Perform scan synchronously to ensure correctness and prevent race conditions
-    _perform_cache_scan()
+    _perform_cache_scan(force=force)
 
-def _perform_cache_scan():
+def _perform_cache_scan(force=False):
     global doc_cache, cache_last_updated
+    import json
+    
+    cache_file = os.path.join(VAULT_DIR, ".cache", "document_index.json")
+    
+    # Try loading from persisted cache index first if not forced and cache is empty
+    if not force and not doc_cache:
+        if os.path.exists(cache_file):
+            try:
+                start_t = time.time()
+                with open(cache_file, "r", encoding="utf-8") as f:
+                    doc_cache = json.load(f)
+                cache_last_updated = os.path.getmtime(cache_file)
+                print(f"[CACHE-LOAD] Loaded {len(doc_cache)} documents from persisted index in {time.time() - start_t:.3f}s")
+                return
+            except Exception as e:
+                print(f"[CACHE-LOAD] Failed to load persisted index: {e}")
+
     with cache_lock:
+        start_t = time.time()
         new_cache = []
         scan_dirs = ["knowledge", "guru report", "macro report", "tech trend", "startup report", "snp500 report", "monthly_magazines", "llmwiki chat"]
         
@@ -194,6 +212,17 @@ def _perform_cache_scan():
             
         doc_cache = new_cache
         cache_last_updated = time.time()
+        print(f"[CACHE-SCAN] Synchronously scanned {len(doc_cache)} documents in {time.time() - start_t:.3f}s")
+        
+        # Save to persisted cache file for subsequent instant loading
+        try:
+            cache_dir = os.path.dirname(cache_file)
+            os.makedirs(cache_dir, exist_ok=True)
+            with open(cache_file, "w", encoding="utf-8") as f:
+                json.dump(new_cache, f, ensure_ascii=False)
+            print(f"[CACHE-SAVE] Successfully saved index to {cache_file}")
+        except Exception as e:
+            print(f"[CACHE-SAVE] Failed to save persisted index: {e}")
 
 def get_all_cached_documents():
     """

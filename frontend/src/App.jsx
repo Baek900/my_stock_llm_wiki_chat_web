@@ -4,7 +4,7 @@ import remarkGfm from 'remark-gfm';
 import { 
   Search, BookOpen, MessageSquare, ShieldAlert, Cpu, 
   ChevronRight, RefreshCw, Sun, Moon, ArrowRight, Check, X,
-  FileText, Globe, Lightbulb, Network, ZoomIn, ZoomOut, Maximize2, Minimize2, Eye, Type
+  FileText, Globe, Lightbulb, Network, ZoomIn, ZoomOut, Maximize2, Minimize2, Eye, Type, RotateCw
 } from 'lucide-react';
 import './App.css';
 import OnboardingGuide from './components/OnboardingGuide';
@@ -110,13 +110,79 @@ function TreeNode({ node, onSelect, selectedPath }) {
 
 function App() {
   // 1. All State and Ref Hooks at the very top
-  const [activeTab, setActiveTab] = useState('explorer'); // 'explorer' | 'graph'
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
+  const [isAuthEnabled, setIsAuthEnabled] = useState(false);
+  const [passcode, setPasscode] = useState('');
+  const [loginError, setLoginError] = useState('');
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+
+  const fetchWithAuth = async (url, options = {}) => {
+    const token = localStorage.getItem('session_token');
+    const headers = {
+      ...(options.headers || {}),
+    };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    const res = await fetch(url, {
+      ...options,
+      headers,
+    });
+    if (res.status === 401 || res.status === 403) {
+      if (!url.includes('/api/auth/')) {
+        localStorage.removeItem('session_token');
+        setIsAuthenticated(false);
+      }
+    }
+    return res;
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('session_token');
+    setIsAuthenticated(false);
+  };
+
+  const handlePasscodeLogin = async (e) => {
+    e.preventDefault();
+    if (!passcode) {
+      setLoginError('접근 패스코드를 입력해 주세요.');
+      return;
+    }
+    setLoginError('');
+    setIsLoggingIn(true);
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ passcode })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        localStorage.setItem('session_token', data.token);
+        setIsAuthenticated(true);
+        setPasscode('');
+      } else {
+        const data = await res.json();
+        setLoginError(data.detail || '비밀번호가 올바르지 않습니다.');
+      }
+    } catch (err) {
+      console.error('Login error:', err);
+      setLoginError('서버와의 통신에 실패했습니다.');
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
+
+  const [activeTab, setActiveTab] = useState('landing'); // 'landing' | 'explorer' | 'graph'
   const [documents, setDocuments] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedDoc, setSelectedDoc] = useState(null);
   const [docContent, setDocContent] = useState('');
   const [currentReportResponse, setCurrentReportResponse] = useState('');
-  const [modelMode, setModelMode] = useState('local');
+  const [modelMode, setModelMode] = useState('normal'); // 'normal' | 'turbo'
+  const [searchApprovalQueries, setSearchApprovalQueries] = useState(null);
+  const [lastUserMessage, setLastUserMessage] = useState('');
   const [activeDraftPath, setActiveDraftPath] = useState(null);
   const [isModificationMode, setIsModificationMode] = useState(false);
   const [searchApprovalRequest, setSearchApprovalRequest] = useState(null);
@@ -375,7 +441,7 @@ function App() {
       selectDocument(foundDoc);
     } else {
       try {
-        const res = await fetch(`http://127.0.0.1:8080/api/documents?query=${encodeURIComponent(cleanTitle)}`);
+        const res = await fetchWithAuth(`/api/documents?query=${encodeURIComponent(cleanTitle)}`);
         const data = await res.json();
         if (data && data.length > 0) {
           // If the title starts with a date pattern, do not fallback to any loose search result
@@ -403,7 +469,7 @@ function App() {
     if (!foundDoc) {
       console.log("Document not found in memory, querying backend for:", cleanTitle);
       try {
-        const res = await fetch(`http://127.0.0.1:8080/api/documents?query=${encodeURIComponent(cleanTitle)}`);
+        const res = await fetchWithAuth(`/api/documents?query=${encodeURIComponent(cleanTitle)}`);
         const data = await res.json();
         if (data && data.length > 0) {
           // If the title starts with a date pattern, do not fallback to any loose search result
@@ -418,7 +484,7 @@ function App() {
 
     if (foundDoc) {
       try {
-        const res = await fetch(`http://127.0.0.1:8080/api/documents/detail?path=${encodeURIComponent(foundDoc.path)}`);
+        const res = await fetchWithAuth(`/api/documents/detail?path=${encodeURIComponent(foundDoc.path)}`);
         const data = await res.json();
         setPopupDoc(foundDoc);
         setPopupContent(data.content);
@@ -510,13 +576,61 @@ function App() {
     return root;
   };
 
-  // Load documents and check resource status on mount
+  // 1. Authenticate and load config/Passcode Auth
   useEffect(() => {
-    fetchDocuments();
-    checkResourceStatus();
-    const interval = setInterval(checkResourceStatus, 15000);
-    return () => clearInterval(interval);
+    const initAuth = async () => {
+      try {
+        const configRes = await fetch('/api/auth/config');
+        const configData = await configRes.json();
+        const authEnabled = configData.is_auth_enabled;
+        setIsAuthEnabled(authEnabled);
+
+        if (!authEnabled) {
+          setIsAuthenticated(true);
+          setIsAuthLoading(false);
+          return;
+        }
+
+        const storedToken = localStorage.getItem('session_token');
+        if (storedToken) {
+          try {
+            const verifyRes = await fetch('/api/auth/verify', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ token: storedToken })
+            });
+            if (verifyRes.ok) {
+              setIsAuthenticated(true);
+              setIsAuthLoading(false);
+              return;
+            } else {
+              localStorage.removeItem('session_token');
+            }
+          } catch (e) {
+            console.error("Stored token verification failed:", e);
+            localStorage.removeItem('session_token');
+          }
+        }
+
+        setIsAuthLoading(false);
+      } catch (err) {
+        console.error("Failed to initialize auth:", err);
+        setIsAuthLoading(false);
+      }
+    };
+
+    initAuth();
   }, []);
+
+  // 2. Load documents and check resource status once authenticated
+  useEffect(() => {
+    if (isAuthenticated) {
+      fetchDocuments();
+      checkResourceStatus();
+      const interval = setInterval(checkResourceStatus, 15000);
+      return () => clearInterval(interval);
+    }
+  }, [isAuthenticated]);
 
   useEffect(() => {
     if (darkMode) {
@@ -634,7 +748,7 @@ function App() {
 
   const checkResourceStatus = async () => {
     try {
-      const res = await fetch('http://127.0.0.1:8080/api/status');
+      const res = await fetchWithAuth('/api/status');
       const data = await res.json();
       setResourceStatus(data);
     } catch (e) {
@@ -644,7 +758,7 @@ function App() {
 
   const fetchDocuments = async (query = '') => {
     try {
-      const res = await fetch(`http://127.0.0.1:8080/api/documents?query=${encodeURIComponent(query)}`);
+      const res = await fetchWithAuth(`/api/documents?query=${encodeURIComponent(query)}`);
       const data = await res.json();
       setDocuments(data);
     } catch (e) {
@@ -675,7 +789,7 @@ function App() {
     });
 
     try {
-      const res = await fetch('http://127.0.0.1:8080/api/documents/publish', {
+      const res = await fetchWithAuth('/api/documents/publish', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ draft_path: draftPath })
@@ -719,7 +833,7 @@ function App() {
     // Auto switch to explorer view to view document details
     setActiveTab('explorer');
     try {
-      const res = await fetch(`http://127.0.0.1:8080/api/documents/detail?path=${encodeURIComponent(doc.path)}`);
+      const res = await fetchWithAuth(`/api/documents/detail?path=${encodeURIComponent(doc.path)}`);
       const data = await res.json();
       setDocContent(data.content);
     } catch (e) {
@@ -758,7 +872,7 @@ function App() {
     setSearchApprovalRequest(null);
 
     try {
-      await fetch('http://127.0.0.1:8080/api/documents/clear_drafts', { method: 'POST' });
+      await fetchWithAuth('/api/documents/clear_drafts', { method: 'POST' });
       fetchDocuments(searchQuery);
     } catch (e) {
       console.error('Failed to clear drafts on new chat:', e);
@@ -782,6 +896,8 @@ function App() {
       setSearchApprovalRequest(null);
     }
   };
+    }
+  };
 
   const handleChatSubmit = async (e) => {
     e.preventDefault();
@@ -801,7 +917,7 @@ function App() {
     setIsChatOpen(true);
 
     try {
-      const statusRes = await fetch('http://127.0.0.1:8080/api/status');
+      const statusRes = await fetchWithAuth('/api/status');
       const statusData = await statusRes.json();
       setResourceStatus(statusData);
       if (statusData.busy) {
@@ -824,7 +940,7 @@ function App() {
     abortControllerRef.current = controller;
 
     try {
-      const response = await fetch('http://127.0.0.1:8080/api/chat', {
+      const response = await fetchWithAuth('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
@@ -833,7 +949,9 @@ function App() {
           model_mode: modelMode, 
           draft_path: activeDraftPath,
           is_modification_mode: isModificationMode,
-          chat_history: chatHistory.map(h => ({ role: h.role, content: h.content }))
+          chat_history: chatHistory
+            .filter(h => h.type !== 'search_status')
+            .map(h => ({ role: h.role, content: h.content }))
         })
       });
 
@@ -845,6 +963,7 @@ function App() {
       let buffer = '';
       let accumulatedResponse = '';
       let accumulatedReport = '';
+      let isWaitingForSearchApproval = false;
 
       while (!done) {
         const { value, done: readerDone } = await reader.read();
@@ -888,6 +1007,11 @@ function App() {
                 accumulatedResponse = '⚠️ 지금 로컬 모델 자원이 예약작업(백그라운드 분석 등)에 사용 중에 있으니 나중에 요청하시기 바랍니다.';
                 setCurrentResponse(accumulatedResponse);
                 done = true;
+              } else if (event.type === 'search_request') {
+                setSearchApprovalQueries(event.queries);
+                setLastUserMessage(userMessage);
+                isWaitingForSearchApproval = true;
+                done = true;
               }
             } catch (e) {
               console.error('Failed to parse event line:', line, e);
@@ -896,15 +1020,19 @@ function App() {
         }
       }
 
-      setChatHistory(prev => [...prev, {
-        role: 'assistant',
-        content: accumulatedResponse || (accumulatedReport ? '보고서 생성이 완료되었습니다. 왼쪽 지식 탐색기에서 확인해 주세요.' : '답변을 완성하지 못했습니다.'),
-        thoughts: [] // Delete thoughts from the completed chat history bubble
-      }]);
-      setCurrentResponse('');
-      setCurrentThoughts([]);
-      setCurrentReportResponse('');
-      setIsGenerating(false);
+      if (!isWaitingForSearchApproval) {
+        setChatHistory(prev => [...prev, {
+          role: 'assistant',
+          content: accumulatedResponse || (accumulatedReport ? '보고서 생성이 완료되었습니다. 왼쪽 지식 탐색기에서 확인해 주세요.' : '답변을 완성하지 못했습니다.'),
+          thoughts: [] // Delete thoughts from the completed chat history bubble
+        }]);
+        setCurrentResponse('');
+        setCurrentThoughts([]);
+        setCurrentReportResponse('');
+        setIsGenerating(false);
+      } else {
+        setIsGenerating(false);
+      }
       
       // Reload document list
       fetchDocuments(searchQuery);
@@ -934,7 +1062,7 @@ function App() {
   const acceptImprovement = async () => {
     if (!metaImprovement) return;
     try {
-      const res = await fetch('http://127.0.0.1:8080/api/improve', {
+      const res = await fetchWithAuth('/api/improve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ rule: metaImprovement })
@@ -974,6 +1102,84 @@ function App() {
       ? 'text-sm p-4'
       : 'text-[13px] p-3.5';
 
+  if (isAuthLoading) {
+    return (
+      <div className="flex h-screen w-screen flex-col items-center justify-center bg-slate-950 text-primary dark">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
+          <p className="text-sm font-semibold tracking-wide">인증 정보 로딩 중...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <div className="relative flex h-screen w-screen flex-col items-center justify-center bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-indigo-950 via-slate-950 to-black text-on-background dark overflow-hidden">
+        {/* Glow Effects */}
+        <div className="absolute top-[-20%] left-[-20%] w-[60%] h-[60%] rounded-full bg-primary/10 blur-[120px] pointer-events-none"></div>
+        <div className="absolute bottom-[-20%] right-[-20%] w-[60%] h-[60%] rounded-full bg-primary/10 blur-[120px] pointer-events-none"></div>
+
+        <div className="w-full max-w-sm p-8 rounded-3xl bg-surface-container/30 border border-outline-variant/35 backdrop-blur-xl shadow-2xl flex flex-col items-center z-10 transition-all duration-300">
+          <div className="w-16 h-16 rounded-2xl bg-primary/15 border border-primary/20 flex items-center justify-center mb-6">
+            <Cpu className="text-primary w-8 h-8 animate-pulse" />
+          </div>
+          
+          <h1 className="text-2xl font-extrabold text-primary tracking-tight mb-1">Second Brain</h1>
+          <p className="text-xs font-semibold text-on-surface-variant tracking-widest uppercase mb-6">AI Research Hub</p>
+          
+          <div className="w-full h-px bg-outline-variant/20 mb-6"></div>
+          
+          <p className="text-xs text-on-surface-variant/90 text-center mb-6 leading-relaxed max-w-[280px]">
+            허용된 사용자만 접근할 수 있는 개인 연구 공간입니다. 시스템 접근 비밀번호를 입력해 주세요.
+          </p>
+
+          <form onSubmit={handlePasscodeLogin} className="w-full space-y-4">
+            <div className="relative">
+              <input
+                type="password"
+                placeholder="비밀번호 입력"
+                value={passcode}
+                onChange={(e) => setPasscode(e.target.value)}
+                disabled={isLoggingIn}
+                className="w-full px-4 py-3 rounded-xl bg-surface-container/60 border border-outline-variant/30 text-on-surface placeholder:text-on-surface-variant/50 focus:outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/30 transition-all text-sm pr-10 text-center"
+              />
+              <span className="material-symbols-outlined absolute right-3 top-1/2 -translate-y-1/2 text-on-surface-variant/50 text-[18px]">
+                lock
+              </span>
+            </div>
+
+            {loginError && (
+              <div className="text-[11px] text-error font-medium text-center bg-error/10 py-2 px-3 rounded-lg border border-error/20 flex items-center justify-center gap-1.5 animate-fade-in">
+                <span className="material-symbols-outlined text-[14px]">warning</span>
+                {loginError}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={isLoggingIn}
+              className="w-full py-3 rounded-xl bg-primary hover:bg-primary-container text-on-primary font-bold text-xs transition-all active:scale-[0.98] flex items-center justify-center gap-2 shadow-lg shadow-primary/25 disabled:opacity-50"
+            >
+              {isLoggingIn ? (
+                <div className="w-4 h-4 border-2 border-on-primary border-t-transparent rounded-full animate-spin"></div>
+              ) : (
+                <>
+                  <span>시스템 접속하기</span>
+                  <ArrowRight size={14} />
+                </>
+              )}
+            </button>
+          </form>
+          
+          <div className="mt-8 text-[10px] text-on-surface-variant/70 font-mono tracking-wider">
+            Second Brain v1.0.0
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={`flex w-screen h-screen overflow-hidden bg-background text-on-background ${darkMode ? 'dark' : ''}`}>
       
@@ -991,6 +1197,19 @@ function App() {
 
         {/* Tab Links */}
         <nav className="flex-1 px-4 space-y-1 overflow-y-auto">
+          <button 
+          <button 
+            onClick={() => setActiveTab('landing')}
+            className={`w-full flex items-center px-4 py-3 rounded-xl transition-all ${
+              activeTab === 'landing' 
+                ? 'text-primary border-r-4 border-primary bg-surface-container-low font-bold scale-[0.98]' 
+                : 'text-on-surface-variant hover:bg-surface-container-low'
+            }`}
+          >
+            <span className="material-symbols-outlined mr-3">home</span>
+            <span className="text-[14px]">Home (소개)</span>
+          </button>
+
           <button 
             id="sidebar-explorer"
             onClick={() => setActiveTab('explorer')}
@@ -1018,19 +1237,49 @@ function App() {
           </button>
         </nav>
 
-        {/* Active Project Info */}
-        <div className="px-4 mt-auto shrink-0">
+        {/* Database Status Info */}
+        <div className="px-4 mt-auto">
           <div className="p-4 rounded-2xl bg-surface-container border border-outline-variant/30 relative overflow-hidden">
-            <p className="text-[9px] font-bold text-on-surface-variant tracking-widest uppercase mb-1">Active Model</p>
-            <p className="text-[13px] font-bold text-primary truncate">Gemma 4</p>
-            <div className="mt-3 flex items-center justify-between">
-              <span className={`w-2.5 h-2.5 rounded-full ${resourceStatus.busy ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'}`}></span>
-              <span className="text-[10px] text-on-surface-variant font-mono">
-                {resourceStatus.busy ? '자원 사용 중 (분석 진행)' : '추론 가용 상태'}
+            <p className="text-[9px] font-bold text-on-surface-variant tracking-widest uppercase mb-1">Database Status</p>
+            <div className="flex items-center justify-between mt-1 mb-2">
+              <p className="text-[13px] font-bold text-primary truncate">Obsidian Wiki</p>
+              <span className={`px-2 py-0.5 rounded text-[8px] font-bold ${
+                resourceStatus.doc_count > 0 ? 'bg-emerald-500/10 text-emerald-500' : 'bg-amber-500/10 text-amber-500'
+              }`}>
+                {resourceStatus.status || '연동 완료'}
               </span>
+            </div>
+            <div className="space-y-1 text-[10px] text-on-surface-variant font-mono border-t border-outline-variant/20 pt-2">
+              <div className="flex justify-between">
+                <span>문서 수:</span>
+                <span className="font-semibold text-primary">{resourceStatus.doc_count || 0}개</span>
+              </div>
+              <div className="flex justify-between">
+                <span>최신 갱신:</span>
+                <span className="font-semibold text-primary truncate max-w-[90px]">{resourceStatus.last_updated || '기록 없음'}</span>
+              </div>
             </div>
           </div>
         </div>
+
+        {/* User Profile & Log Out */}
+        {isAuthEnabled && (
+          <div className="px-4 mt-4">
+            <div className="p-3 rounded-2xl bg-surface-container-low border border-outline-variant/30 flex items-center justify-between gap-2">
+              <div className="min-w-0 flex-1">
+                <p className="text-[9px] font-bold text-on-surface-variant tracking-widest uppercase">Logged In As</p>
+                <p className="text-xs font-semibold text-on-surface truncate">관리자 계정</p>
+              </div>
+              <button 
+                onClick={handleLogout}
+                className="p-2 rounded-lg hover:bg-error/15 hover:text-error text-on-surface-variant transition-colors flex items-center justify-center shrink-0"
+                title="로그아웃"
+              >
+                <span className="material-symbols-outlined text-[18px]">logout</span>
+              </button>
+            </div>
+          </div>
+        )}
       </aside>
 
       {/* Main Workspace Panel */}
@@ -1113,6 +1362,141 @@ function App() {
         {/* Dynamic Workspace Content */}
         <div className="flex-1 flex overflow-hidden">
           
+          {/* TAB 0: LANDING PAGE */}
+          {activeTab === 'landing' && (
+            <div className="flex-1 h-full overflow-y-auto bg-surface-container-lowest/30 p-8">
+              <div className="max-w-4xl mx-auto space-y-12 py-6">
+                
+                {/* Hero Section */}
+                <div className="text-center space-y-4">
+                  <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-primary/10 border border-primary/20 text-xs font-semibold text-primary mb-2">
+                    <Cpu size={12} className="animate-spin-slow" />
+                    Agentic Second Brain Platform
+                  </div>
+                  <h1 className="text-4xl md:text-5xl font-black tracking-tight bg-gradient-to-r from-primary via-blue-500 to-indigo-500 bg-clip-text text-transparent">
+                    Agent-Guru AI
+                  </h1>
+                  <p className="text-lg text-on-surface-variant font-medium max-w-2xl mx-auto leading-relaxed">
+                    로컬 지식 베이스와 실시간 웹 검색, 구루 투자 철학을 융합하는 차세대 자율형 리서치 에이전트 허브
+                  </p>
+                  
+                  <div className="pt-6">
+                    <button
+                      onClick={() => setActiveTab('explorer')}
+                      className="inline-flex items-center gap-2 bg-primary hover:bg-primary-hover text-on-primary font-bold px-8 py-3 rounded-full shadow-lg shadow-primary/25 hover:shadow-xl hover:shadow-primary/35 transition-all transform hover:-translate-y-0.5"
+                    >
+                      <span>리서치 시작하기 (Get Started)</span>
+                      <ArrowRight size={18} />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Core Features Grid */}
+                <div className="space-y-6">
+                  <h2 className="text-2xl font-extrabold text-on-surface tracking-tight text-center">🌟 핵심 기능 (Core Features)</h2>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    
+                    <div className="p-6 rounded-2xl bg-surface-container border border-outline-variant/30 hover:border-primary/30 transition-all space-y-3">
+                      <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
+                        <Cpu size={20} />
+                      </div>
+                      <h3 className="text-lg font-bold text-on-surface">하이브리드 모델 (Normal / Turbo)</h3>
+                      <p className="text-xs text-on-surface-variant leading-relaxed">
+                        실시간 성능 토글 스위치(Normal: gemini-3.5-flash / Turbo: gemini-3.1-pro-preview)를 지원하여 연산 비용 효율성을 극대화합니다.
+                      </p>
+                    </div>
+
+                    <div className="p-6 rounded-2xl bg-surface-container border border-outline-variant/30 hover:border-primary/30 transition-all space-y-3">
+                      <div className="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center text-blue-500">
+                        <Network size={20} />
+                      </div>
+                      <h3 className="text-lg font-bold text-on-surface">컨텍스트 분류 및 계획 수립</h3>
+                      <p className="text-xs text-on-surface-variant leading-relaxed">
+                        사용자 질문의 의도를 분석하여 단순 대화(Chat)와 리서치(RAG)를 자동 분류하고, 다단계 지식 탐색 계획을 기획하여 시각화합니다.
+                      </p>
+                    </div>
+
+                    <div className="p-6 rounded-2xl bg-surface-container border border-outline-variant/30 hover:border-primary/30 transition-all space-y-3">
+                      <div className="w-10 h-10 rounded-xl bg-indigo-500/10 flex items-center justify-center text-indigo-500">
+                        <Lightbulb size={20} />
+                      </div>
+                      <h3 className="text-lg font-bold text-on-surface">구루 포트폴리오 스크리닝</h3>
+                      <p className="text-xs text-on-surface-variant leading-relaxed">
+                        워런 버핏, 피터 린치 등 21인 구루들의 철학과 정량 필터링 공식을 반영하여 기업 재무 정보를 스크리닝하고 최적의 자산 배분 비중을 도출합니다.
+                      </p>
+                    </div>
+
+                    <div className="p-6 rounded-2xl bg-surface-container border border-outline-variant/30 hover:border-primary/30 transition-all space-y-3">
+                      <div className="w-10 h-10 rounded-xl bg-emerald-500/10 flex items-center justify-center text-emerald-500">
+                        <BookOpen size={20} />
+                      </div>
+                      <h3 className="text-lg font-bold text-on-surface">초안-발행 워크플로우 & 위키 동기화</h3>
+                      <p className="text-xs text-on-surface-variant leading-relaxed">
+                        임시 초안에서 지속적인 챗 피드백으로 보완된 보고서를 1클릭으로 위키에 발행하며, 로컬 Google Drive Obsidian과 GCS 간 동기화를 처리합니다.
+                      </p>
+                    </div>
+
+                  </div>
+                </div>
+
+                {/* System Architecture (Visual Timeline) */}
+                <div className="space-y-6">
+                  <h2 className="text-2xl font-extrabold text-on-surface tracking-tight text-center">🏗️ 에이전트 리서치 흐름 (Workflow)</h2>
+                  <div className="relative border-l-2 border-outline-variant/30 pl-6 ml-4 space-y-8">
+                    
+                    <div className="relative">
+                      <span className="absolute -left-[31px] top-1 w-4 h-4 rounded-full bg-primary border-4 border-background"></span>
+                      <h4 className="text-sm font-bold text-on-surface">1. 의도 자동 분석 (Intent Classification)</h4>
+                      <p className="text-xs text-on-surface-variant mt-1 leading-relaxed">
+                        사용자 질문을 분석하여 일반 대화, 모호한 질문, RAG 심층 리서치 등으로 가볍게 라우팅합니다.
+                      </p>
+                    </div>
+
+                    <div className="relative">
+                      <span className="absolute -left-[31px] top-1 w-4 h-4 rounded-full bg-blue-500 border-4 border-background"></span>
+                      <h4 className="text-sm font-bold text-on-surface">2. 다단계 지식 탐색 및 로컬 RAG</h4>
+                      <p className="text-xs text-on-surface-variant mt-1 leading-relaxed">
+                        질문에 대한 유의어를 확장하고, 로컬 Obsidian Wiki 데이터베이스(MCP 스킬)에서 1차 지식을 검색합니다.
+                      </p>
+                    </div>
+
+                    <div className="relative">
+                      <span className="absolute -left-[31px] top-1 w-4 h-4 rounded-full bg-amber-500 border-4 border-background"></span>
+                      <h4 className="text-sm font-bold text-on-surface">3. 외부 검색 승인식 그라운딩 (Grounding Tool)</h4>
+                      <p className="text-xs text-on-surface-variant mt-1 leading-relaxed">
+                        로컬 지식이 부족한 경우, 외부 검색 승인 알림창을 띄워 사용자 동의를 얻은 후 구글 검색(최대 4회)을 수행하여 정보 왜곡(할루시네이션)을 원천 차단합니다.
+                      </p>
+                    </div>
+
+                    <div className="relative">
+                      <span className="absolute -left-[31px] top-1 w-4 h-4 rounded-full bg-emerald-500 border-4 border-background"></span>
+                      <h4 className="text-sm font-bold text-on-surface">4. 보고서 합성 및 위키 발행</h4>
+                      <p className="text-xs text-on-surface-variant mt-1 leading-relaxed">
+                        수집 및 학습된 투자 지식을 결합해 최종 마크다운 보고서 초안을 작성하며, 확인 버튼을 눌러 위키 색인 문서로 영구 저장합니다.
+                      </p>
+                    </div>
+
+                  </div>
+                </div>
+
+                {/* Technology Stack */}
+                <div className="p-6 rounded-3xl bg-surface-container-high/60 border border-outline-variant/20 text-center space-y-4">
+                  <h3 className="text-lg font-bold text-on-surface">⚙️ Tech Stack & Ecosystem</h3>
+                  <div className="flex flex-wrap items-center justify-center gap-3 text-[11px] font-mono text-on-surface-variant">
+                    <span className="px-3 py-1 rounded-full bg-surface-container">React (Vite)</span>
+                    <span className="px-3 py-1 rounded-full bg-surface-container">TailwindCSS</span>
+                    <span className="px-3 py-1 rounded-full bg-surface-container">FastAPI (Python)</span>
+                    <span className="px-3 py-1 rounded-full bg-surface-container">Vertex AI</span>
+                    <span className="px-3 py-1 rounded-full bg-surface-container">Cloud Run (FUSE)</span>
+                    <span className="px-3 py-1 rounded-full bg-surface-container">Google Cloud Storage</span>
+                    <span className="px-3 py-1 rounded-full bg-surface-container">Obsidian Vault</span>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+          )}
+
           {/* TAB 1: KNOWLEDGE EXPLORER & VIEWER */}
           {activeTab === 'explorer' && (
             <div className="flex-1 flex h-full overflow-hidden">
@@ -1290,7 +1674,11 @@ function App() {
 
           {/* TAB 2: INTERACTIVE KNOWLEDGE GRAPH */}
           {activeTab === 'graph' && (
-            <Interactive3DGraph documents={documents} onSelectNode={selectDocument} fontScale={fontScale} />
+            <Interactive3DGraph 
+              documents={documents} 
+              onSelectNode={selectDocument} 
+              showDocumentPopup={showDocumentPopup}
+            />
           )}
         </div>
       </div>
@@ -1366,7 +1754,7 @@ function App() {
               <div className="flex items-center justify-between">
                 <span className="font-bold text-on-surface-variant flex items-center gap-1">
                   <Cpu size={14} className="text-primary" />
-                  추론 모델 모드:
+                  리서치 모드:
                 </span>
                 <div className="flex bg-surface-container-high rounded-full p-0.5 border border-outline-variant/20">
                   <button
@@ -1379,7 +1767,7 @@ function App() {
                     }`}
                     title="Antigravity 2.0 Cloud API (Gemini Flash-Lite/Flash) 모델을 사용합니다."
                   >
-                    Cloud
+                    Normal
                   </button>
                   <button
                     type="button"
@@ -1403,7 +1791,7 @@ function App() {
                     }`}
                     title="Local Gemma-4 모델을 사용합니다."
                   >
-                    Local
+                    Turbo
                   </button>
                 </div>
               </div>
@@ -1430,41 +1818,54 @@ function App() {
 
             {/* Message Area */}
             <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-surface-container-lowest/50">
-              {chatHistory.map((msg, idx) => (
-                <div key={idx} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
-                  <span className="text-[10px] text-outline font-bold mb-1">{msg.role === 'user' ? '사용자' : 'Agent-Guru'}</span>
-                  
-                  {/* Thoughts Timeline */}
-                  {msg.thoughts && msg.thoughts.length > 0 && (
-                    <details className="w-full max-w-[90%] bg-surface-container border border-outline-variant/30 rounded-xl p-2.5 mb-2 text-xs">
-                      <summary className="cursor-pointer text-[11px] font-bold text-primary hover:underline select-none">
-                        RAG 및 다단계 추론 스캔 ({msg.thoughts.length}단계 완료)
-                      </summary>
-                      <ul className="mt-2 space-y-1.5 border-l-2 border-primary/20 pl-3">
-                        {msg.thoughts.map((t, tIdx) => (
-                          <li key={tIdx} className="text-on-surface-variant leading-relaxed text-[11px]">
-                            {t}
-                          </li>
-                        ))}
-                      </ul>
-                    </details>
-                  )}
+              {chatHistory.map((msg, idx) => {
+                if (msg.type === 'search_status') {
+                  return (
+                    <div key={idx} className="flex justify-center my-2 animate-fade-in">
+                      <div className="flex items-center gap-1.5 px-3 py-1 bg-amber-500/10 border border-amber-500/20 rounded-full text-[11px] font-medium text-amber-600 dark:text-amber-400">
+                        <span className="material-symbols-outlined text-[13px]">find_in_page</span>
+                        <span>{msg.content}</span>
+                      </div>
+                    </div>
+                  );
+                }
 
-                  <div className={`max-w-[90%] rounded-2xl leading-relaxed ${messageFontClass} ${
-                    msg.role === 'user' 
-                      ? 'bg-primary text-on-primary rounded-tr-none' 
-                      : 'bg-surface-container border border-outline-variant/30 text-on-background rounded-tl-none markdown-body'
-                  }`}>
-                    {msg.role === 'user' ? (
-                      msg.content
-                    ) : (
-                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: MarkdownLink }}>
-                        {preprocessMarkdown(msg.content)}
-                      </ReactMarkdown>
+                return (
+                  <div key={idx} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
+                    <span className="text-[10px] text-outline font-bold mb-1">{msg.role === 'user' ? '사용자' : 'Agent-Guru'}</span>
+                    
+                    {/* Thoughts Timeline */}
+                    {msg.thoughts && msg.thoughts.length > 0 && (
+                      <details className="w-full max-w-[90%] bg-surface-container border border-outline-variant/30 rounded-xl p-2.5 mb-2 text-xs">
+                        <summary className="cursor-pointer text-[11px] font-bold text-primary hover:underline select-none">
+                          RAG 및 다단계 추론 스캔 ({msg.thoughts.length}단계 완료)
+                        </summary>
+                        <ul className="mt-2 space-y-1.5 border-l-2 border-primary/20 pl-3">
+                          {msg.thoughts.map((t, tIdx) => (
+                            <li key={tIdx} className="text-on-surface-variant leading-relaxed text-[11px]">
+                              {t}
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
                     )}
+
+                    <div className={`max-w-[90%] rounded-2xl leading-relaxed ${messageFontClass} ${
+                      msg.role === 'user' 
+                        ? 'bg-primary text-on-primary rounded-tr-none' 
+                        : 'bg-surface-container border border-outline-variant/30 text-on-background rounded-tl-none markdown-body'
+                    }`}>
+                      {msg.role === 'user' ? (
+                        msg.content
+                      ) : (
+                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: MarkdownLink }}>
+                          {preprocessMarkdown(msg.content)}
+                        </ReactMarkdown>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
 
               {/* Streaming Content */}
               {isGenerating && (
@@ -1497,6 +1898,7 @@ function App() {
                   )}
                 </div>
               )}
+
               <div ref={chatEndRef} />
             </div>
 
@@ -1567,6 +1969,7 @@ function App() {
           </button>
         )}
       </div>
+      )}
 
       {/* Document Detail Popup Modal */}
       {isPopupOpen && popupDoc && (
@@ -1648,21 +2051,86 @@ function App() {
 
 export default App;
 
-function Interactive3DGraph({ documents, onSelectNode, fontScale = 'normal' }) {
+function Interactive3DGraph({ documents, onSelectNode, showDocumentPopup }) {
   const canvasRef = React.useRef(null);
   const requestRef = React.useRef(null);
   
-  // State for tracking which folders are manually expanded
-  const [expandedFolders, setExpandedFolders] = React.useState(new Set(['llmwiki chat']));
-  const [hoveredInfo, setHoveredInfo] = React.useState(null);
-  const [isLoading, setIsLoading] = React.useState(true);
+  const FOLDER_DISPLAY_NAMES = {
+    'knowledge/macro': '거시경제 (Macro)',
+    'knowledge/tech_themes': '기술테마 (Tech Themes)',
+    'knowledge/industries': '산업 (Industries)',
+    'knowledge/segments': '세부 부문 (Segments)',
+    'knowledge/institutions': '기관/기업 (Institutions)',
+    'knowledge/people': '인물 (People)',
+    'knowledge/drafts': '초안 (Drafts)',
+    'knowledge/USA': '미국 시장 (USA)',
+    'knowledge': '지식 위키 (Knowledge)',
+    'llmwiki chat': '결정화 대화 (Chat Log)',
+    'guru report': '구루 보고서',
+    'macro report': '매크로 보고서',
+    'tech trend': '기술 트렌드',
+    'startup report': '스타트업 보고서',
+    'monthly_magazines': '월간 매거진',
+    'snp500 report': 'S&P500 보고서'
+  };
+  
+  // React state for collapsible folders
+  const [expandedFolders, setExpandedFolders] = React.useState(new Set());
+  
+  // React state for floating explorer
+  const [explorerSize, setExplorerSize] = React.useState({ width: 280, height: 380 });
+  const [isExplorerMinimized, setIsExplorerMinimized] = React.useState(false);
+  
+  // Cache to store node coordinates to prevent resetting positions on collapse/expand
+  const nodePositionsRef = React.useRef({});
+  const resizingRef = React.useRef(null);
 
-  const fontScaleRef = React.useRef(fontScale);
-  React.useEffect(() => {
-    fontScaleRef.current = fontScale;
-  }, [fontScale]);
+  // Helper to resolve folder color
+  const getFolderColor = (folderName) => {
+    const FOLDER_COLORS = {
+      'knowledge/macro': '#38bdf8',
+      'knowledge/tech_themes': '#c084fc',
+      'knowledge/industries': '#34d399',
+      'knowledge/segments': '#2dd4bf',
+      'knowledge/institutions': '#fb923c',
+      'knowledge/people': '#f472b6',
+      'knowledge/drafts': '#a3a3a3',
+      'knowledge/USA': '#60a5fa',
+      'knowledge': '#3b82f6',
+      'guru report': '#a855f7',
+      'macro report': '#f59e0b',
+      'tech trend': '#06b6d4',
+      'startup report': '#ec4899',
+      'monthly_magazines': '#10b981',
+      'llmwiki chat': '#eab308',
+      'snp500 report': '#6366f1'
+    };
+    if (FOLDER_COLORS[folderName]) return FOLDER_COLORS[folderName];
+    // Check key prefixes (e.g. knowledge/macro/subfolder)
+    for (const key of Object.keys(FOLDER_COLORS)) {
+      if (folderName && folderName.startsWith(key + '/')) return FOLDER_COLORS[key];
+    }
+    // Simple string hash to HSL
+    let hash = 0;
+    for (let i = 0; i < folderName.length; i++) {
+      hash = folderName.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    const h = Math.abs(hash % 360);
+    return `hsl(${h}, 75%, 60%)`;
+  };
 
-  const shouldResetPositionsRef = React.useRef(false);
+  // Reset graph view state
+  const handleResetGraphView = () => {
+    nodePositionsRef.current = {};
+    setExpandedFolders(new Set());
+    stateRef.current.zoom = 1.0;
+    stateRef.current.yaw = 0.0;
+    stateRef.current.pitch = 0.0;
+    stateRef.current.autoRotate = true;
+    stateRef.current.nodes = [];
+    stateRef.current.links = [];
+    setIsLoading(true);
+  };
 
   const stateRef = React.useRef({
     nodes: [],
@@ -1691,7 +2159,61 @@ function Interactive3DGraph({ documents, onSelectNode, fontScale = 'normal' }) {
     });
   };
 
-  // Re-calculate visible nodes and links when documents or expandedFolders change
+  // Resize handler for explorer panel
+  const handleResizeMouseDown = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    resizingRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      startWidth: explorerSize.width,
+      startHeight: explorerSize.height
+    };
+    
+    const handleMouseMove = (moveEvent) => {
+      if (!resizingRef.current) return;
+      const dx = moveEvent.clientX - resizingRef.current.startX;
+      const dy = moveEvent.clientY - resizingRef.current.startY;
+      setExplorerSize({
+        width: Math.max(220, resizingRef.current.startWidth + dx),
+        height: Math.max(200, resizingRef.current.startHeight + dy)
+      });
+    };
+    
+    const handleMouseUp = () => {
+      resizingRef.current = null;
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+    
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+  };
+
+  // Group documents by folder for explorer tree
+  const foldersMap = React.useMemo(() => {
+    const map = {};
+    documents.forEach(doc => {
+      const folder = doc.folder || 'other';
+      if (!map[folder]) map[folder] = [];
+      map[folder].push(doc);
+    });
+    return map;
+  }, [documents]);
+
+  const toggleFolder = (folderName) => {
+    setExpandedFolders(prev => {
+      const next = new Set(prev);
+      if (next.has(folderName)) {
+        next.delete(folderName);
+      } else {
+        next.add(folderName);
+      }
+      return next;
+    });
+  };
+
+  // Initialize and update nodes/links dynamically
   React.useEffect(() => {
     if (!documents || documents.length === 0) {
       setIsLoading(true);
@@ -1700,145 +2222,114 @@ function Interactive3DGraph({ documents, onSelectNode, fontScale = 'normal' }) {
 
     setIsLoading(true);
 
-    // Group documents by folder
-    const folderGroups = {};
-    documents.forEach(doc => {
-      const folder = doc.folder || 'Other';
-      if (!folderGroups[folder]) {
-        folderGroups[folder] = [];
-      }
-      folderGroups[folder].push(doc);
+    // 1. Cache current coordinates of nodes
+    const state = stateRef.current;
+    state.nodes.forEach(n => {
+      nodePositionsRef.current[n.id] = { x: n.x, y: n.y, z: n.z, vx: n.vx, vy: n.vy, vz: n.vz };
     });
 
-    const nodes = [];
-    const clusterNodesMap = {};
+    // 2. Extract unique folders
+    const uniqueFolders = Array.from(new Set(documents.map(d => d.folder || 'other')));
 
-    // Center coordinates for folders (centered around 0,0,0 - compact configuration)
-    const folderCenters = {
-      'knowledge/macro': { x: -80, y: -50, z: -20 },
-      'knowledge/institutions': { x: -60, y: -70, z: 10 },
-      'knowledge/people': { x: -100, y: -30, z: 30 },
-      'knowledge/tech_themes': { x: -30, y: -60, z: -30 },
-      'knowledge/industries': { x: -40, y: -30, z: 20 },
-      'knowledge/segments': { x: -20, y: -40, z: -10 },
-      'knowledge/drafts': { x: -50, y: -10, z: 0 },
-      'knowledge': { x: -60, y: -50, z: 0 },
-      'snp500 report': { x: 70, y: -60, z: 30 },
-      'macro report': { x: -80, y: 50, z: -30 },
-      'tech trend': { x: 60, y: 60, z: -20 },
-      'llmwiki chat': { x: 0, y: 0, z: 20 },
-      'Other': { x: 0, y: 0, z: 0 }
-    };
-
-    // We get the previous node positions/velocities if they exist
-    const prevNodesMap = {};
-    if (stateRef.current.nodes && !shouldResetPositionsRef.current) {
-      stateRef.current.nodes.forEach(n => {
-        prevNodesMap[n.id] = { x: n.x, y: n.y, z: n.z, vx: n.vx, vy: n.vy, vz: n.vz };
-      });
-    }
-    shouldResetPositionsRef.current = false;
-
-    // 1. Generate Nodes (Individual or Cluster Node)
-    Object.keys(folderGroups).forEach(folder => {
-      const docs = folderGroups[folder];
-      const isExpanded = expandedFolders.has(folder);
+    // 3. Create folder nodes (always visible)
+    const folderNodes = uniqueFolders.map((folder, index) => {
+      const id = `folder-${folder}`;
+      let x = 0, y = 0, z = 0;
+      let vx = 0, vy = 0, vz = 0;
       
-      let center = folderCenters[folder];
-      if (!center) {
-        if (folder.startsWith('knowledge')) {
-          center = folderCenters['knowledge'];
-        } else {
-          center = folderCenters['Other'];
-        }
-      }
-
-      if (!isExpanded && docs.length > 1) {
-        // Create a single Cluster Node representing this folder
-        const clusterId = `cluster-${folder}`;
-        const prev = prevNodesMap[clusterId];
-        
-        let x, y, z;
-        let vx = 0, vy = 0, vz = 0;
-        if (prev) {
-          x = prev.x; y = prev.y; z = prev.z;
-          vx = prev.vx; vy = prev.vy; vz = prev.vz;
-        } else {
-          // Average position of previous child nodes
-          let sumX = 0, sumY = 0, sumZ = 0, count = 0;
-          docs.forEach(doc => {
-            if (prevNodesMap[doc.path]) {
-              sumX += prevNodesMap[doc.path].x;
-              sumY += prevNodesMap[doc.path].y;
-              sumZ += prevNodesMap[doc.path].z;
-              count++;
-            }
-          });
-          if (count > 0) {
-            x = sumX / count;
-            y = sumY / count;
-            z = sumZ / count;
-          } else {
-            x = center.x;
-            y = center.y;
-            z = center.z;
-          }
-        }
-
-        const folderDisplayName = getFolderDisplayName(folder);
-        const clusterNode = {
-          id: clusterId,
-          title: `📁 ${folderDisplayName} [${docs.length}]`,
-          folder: folder,
-          isCluster: true,
-          childCount: docs.length,
-          x, y, z,
-          vx, vy, vz,
-          screenX: 0, screenY: 0, depth: 0, projectedScale: 1.0
-        };
-        nodes.push(clusterNode);
-        clusterNodesMap[folder] = clusterNode;
+      if (nodePositionsRef.current[id]) {
+        x = nodePositionsRef.current[id].x;
+        y = nodePositionsRef.current[id].y;
+        z = nodePositionsRef.current[id].z;
+        vx = nodePositionsRef.current[id].vx;
+        vy = nodePositionsRef.current[id].vy;
+        vz = nodePositionsRef.current[id].vz;
       } else {
-        // Create individual document nodes
-        docs.forEach((doc, index) => {
-          const prev = prevNodesMap[doc.path];
-          let x, y, z;
-          let vx = 0, vy = 0, vz = 0;
-          if (prev) {
-            x = prev.x; y = prev.y; z = prev.z;
-            vx = prev.vx; vy = prev.vy; vz = prev.vz;
-          } else {
-            // Spawn near previous cluster node if existed
-            const clusterId = `cluster-${folder}`;
-            const prevCluster = prevNodesMap[clusterId];
-            const spawnCenter = prevCluster || center;
-            
-            const angle = (index / docs.length) * 2 * Math.PI;
-            const radius = 40 + Math.random() * 15;
-            x = spawnCenter.x + radius * Math.cos(angle);
-            y = spawnCenter.y + radius * Math.sin(angle);
-            z = spawnCenter.z + (Math.random() * 40 - 20);
-          }
+        const theta = (index / uniqueFolders.length) * 2 * Math.PI;
+        const r = 180;
+        x = r * Math.cos(theta);
+        y = r * Math.sin(theta);
+        z = (Math.random() - 0.5) * 80;
+      }
+      
+      return {
+        id,
+        title: folder,
+        isFolder: true,
+        folder: folder,
+        fileCount: foldersMap[folder]?.length || 0,
+        x, y, z, vx, vy, vz,
+        screenX: 0, screenY: 0, depth: 0, projectedScale: 1.0
+      };
+    });
 
-          nodes.push({
-            id: doc.path,
+    // 4. Create active file nodes (only if folder is in expandedFolders)
+    const fileNodes = [];
+    documents.forEach(doc => {
+      const docFolder = doc.folder || 'other';
+      if (expandedFolders.has(docFolder)) {
+        const id = doc.path;
+        let x = 0, y = 0, z = 0;
+        let vx = 0, vy = 0, vz = 0;
+        
+        if (nodePositionsRef.current[id]) {
+          x = nodePositionsRef.current[id].x;
+          y = nodePositionsRef.current[id].y;
+          z = nodePositionsRef.current[id].z;
+          vx = nodePositionsRef.current[id].vx;
+          vy = nodePositionsRef.current[id].vy;
+          vz = nodePositionsRef.current[id].vz;
+        } else {
+          // Spawn near parent folder node
+          const parentFolderNode = folderNodes.find(f => f.folder === docFolder);
+          const px = parentFolderNode ? parentFolderNode.x : 0;
+          const py = parentFolderNode ? parentFolderNode.y : 0;
+          const pz = parentFolderNode ? parentFolderNode.z : 0;
+          
+          x = px + (Math.random() - 0.5) * 40;
+          y = py + (Math.random() - 0.5) * 40;
+          z = pz + (Math.random() - 0.5) * 40;
+        }
+        
+        const existingCountInFolder = fileNodes.filter(n => n.folder === docFolder).length;
+        if (existingCountInFolder < 50) {
+          fileNodes.push({
+            id,
             title: doc.title,
-            folder: doc.folder,
+            folder: docFolder,
+            isFolder: false,
             docRef: doc,
-            isCluster: false,
-            x, y, z,
-            vx, vy, vz,
+            x, y, z, vx, vy, vz,
             screenX: 0, screenY: 0, depth: 0, projectedScale: 1.0
           });
+        }
+      }
+    });
+
+    const activeNodes = [...folderNodes, ...fileNodes];
+
+    // 5. Create links
+    const activeLinks = [];
+    
+    // Link files to parent folder nodes
+    fileNodes.forEach(fileNode => {
+      const parentFolderNode = folderNodes.find(f => f.folder === fileNode.folder);
+      if (parentFolderNode) {
+        activeLinks.push({
+          source: parentFolderNode,
+          target: fileNode,
+          id: `link-folder-${fileNode.folder}-${fileNode.id}`
         });
       }
     });
 
-    // 2. Generate Links
-    const links = [];
+    // Link file-to-file wiki links (only if both are active)
     documents.forEach(docA => {
-      const folderA = docA.folder || 'Other';
-      const isAExpanded = expandedFolders.has(folderA);
+      const docAFolder = docA.folder || 'other';
+      if (!expandedFolders.has(docAFolder)) return;
+      
+      const sourceNode = fileNodes.find(n => n.id === docA.path);
+      if (!sourceNode) return;
       
       const sourceId = isAExpanded ? docA.path : `cluster-${folderA}`;
       const sourceNode = nodes.find(n => n.id === sourceId);
@@ -1850,19 +2341,18 @@ function Interactive3DGraph({ documents, onSelectNode, fontScale = 'normal' }) {
           d.title.toLowerCase() === linkedTitle.toLowerCase()
         );
         if (targetDoc) {
-          const folderB = targetDoc.folder || 'Other';
-          const isBExpanded = expandedFolders.has(folderB);
+          const targetDocFolder = targetDoc.folder || 'other';
+          if (!expandedFolders.has(targetDocFolder)) return;
           
-          const targetId = isBExpanded ? targetDoc.path : `cluster-${folderB}`;
-          const targetNode = nodes.find(n => n.id === targetId);
-          
+          const targetNode = fileNodes.find(n => n.id === targetDoc.path);
           if (targetNode && sourceNode.id !== targetNode.id) {
-            const exists = links.some(l => 
+            // Avoid duplicate links
+            const exists = activeLinks.some(l => 
               (l.source.id === sourceNode.id && l.target.id === targetNode.id) ||
               (l.source.id === targetNode.id && l.target.id === sourceNode.id)
             );
             if (!exists) {
-              links.push({
+              activeLinks.push({
                 source: sourceNode,
                 target: targetNode,
                 id: `link-${sourceNode.id}-${targetNode.id}`
@@ -1873,49 +2363,8 @@ function Interactive3DGraph({ documents, onSelectNode, fontScale = 'normal' }) {
       });
     });
 
-    // Also draw links between Cluster nodes and active children to anchor them visually
-    Object.keys(folderGroups).forEach(folder => {
-      const isExpanded = expandedFolders.has(folder);
-      if (isExpanded) {
-        const docs = folderGroups[folder];
-        const center = folderCenters[folder] || folderCenters['Other'];
-        
-        const anchorId = `anchor-${folder}`;
-        const prev = prevNodesMap[anchorId];
-        let x, y, z;
-        if (prev) {
-          x = prev.x; y = prev.y; z = prev.z;
-        } else {
-          x = center.x; y = center.y; z = center.z;
-        }
-
-        const anchorNode = {
-          id: anchorId,
-          title: "",
-          folder: folder,
-          isAnchor: true,
-          x, y, z,
-          vx: 0, vy: 0, vz: 0,
-          screenX: 0, screenY: 0, depth: 0, projectedScale: 0
-        };
-        nodes.push(anchorNode);
-
-        docs.forEach(doc => {
-          const childNode = nodes.find(n => n.id === doc.path);
-          if (childNode) {
-            links.push({
-              source: anchorNode,
-              target: childNode,
-              id: `anchor-link-${folder}-${doc.path}`,
-              isLayoutOnly: true
-            });
-          }
-        });
-      }
-    });
-
-    stateRef.current.nodes = nodes;
-    stateRef.current.links = links;
+    stateRef.current.nodes = activeNodes;
+    stateRef.current.links = activeLinks;
 
     const timer = setTimeout(() => {
       setIsLoading(false);
@@ -1949,7 +2398,7 @@ function Interactive3DGraph({ documents, onSelectNode, fontScale = 'normal' }) {
 
       // 1. Force-directed physics
       if (nodes.length > 0) {
-        // Repulsion (coulomb force)
+        // Repulsion
         for (let i = 0; i < nodes.length; i++) {
           if (nodes[i].isAnchor) continue;
           for (let j = i + 1; j < nodes.length; j++) {
@@ -1959,19 +2408,14 @@ function Interactive3DGraph({ documents, onSelectNode, fontScale = 'normal' }) {
             const dx = nb.x - na.x;
             const dy = nb.y - na.y;
             const dz = nb.z - na.z;
-            
-            // INCREASE Stabilizer constant to 10.0 to prevent infinity/NaN
-            const distSq = dx*dx + dy*dy + dz*dz + 10.0;
+            const distSq = dx*dx + dy*dy + dz*dz + 40.0;
             const dist = Math.sqrt(distSq);
             
-            const maxRepulsionDist = (na.isCluster || nb.isCluster) ? 350 : 200;
-            if (dist < maxRepulsionDist) {
-              const charge = (na.isCluster || nb.isCluster) ? 200 : 80;
-              // Scale down repulsion charge dynamically for high-density node counts to avoid explosions
-              const densityFactor = nodes.length > 30 ? (30 / nodes.length) : 1.0;
-              let force = (charge * densityFactor) / distSq;
-              if (force > 40.0) force = 40.0; // Cap maximum repulsion force
-              
+            // Adjust repulsion distance based on whether it is folder/file
+            const minRepel = (na.isFolder || nb.isFolder) ? 220 : 120;
+            if (dist < minRepel) {
+              const rawForce = (na.isFolder || nb.isFolder) ? 250 / distSq : 120 / distSq;
+              const force = Math.min(rawForce, 15);
               const fx = (dx / dist) * force;
               const fy = (dy / dist) * force;
               const fz = (dz / dist) * force;
@@ -1984,7 +2428,7 @@ function Interactive3DGraph({ documents, onSelectNode, fontScale = 'normal' }) {
           }
         }
 
-        // Attraction (links)
+        // Attraction
         links.forEach(link => {
           const na = link.source;
           const nb = link.target;
@@ -1993,18 +2437,11 @@ function Interactive3DGraph({ documents, onSelectNode, fontScale = 'normal' }) {
           const dz = nb.z - na.z;
           const dist = Math.sqrt(dx*dx + dy*dy + dz*dz) + 0.1;
           
-          let k = 0.008; // spring stiffness
-          let restLength = 120;
-          if (link.isLayoutOnly) {
-            k = 0.03; // Keep children tightly bound around their virtual folder anchor
-            restLength = 50;
-          }
+          const isFolderLink = na.isFolder || nb.isFolder;
+          const k = isFolderLink ? 0.015 : 0.008; // pull files closer to parent folders
+          const restLength = isFolderLink ? 80 : 120;
           
-          let force = (dist - restLength) * k;
-          // Cap attraction spring force to prevent numerical oscillation explosion
-          if (force > 15.0) force = 15.0;
-          if (force < -15.0) force = -15.0;
-          
+          const force = (dist - restLength) * k;
           const fx = (dx / dist) * force;
           const fy = (dy / dist) * force;
           const fz = (dz / dist) * force;
@@ -2017,22 +2454,21 @@ function Interactive3DGraph({ documents, onSelectNode, fontScale = 'normal' }) {
 
         // Center gravity - increased strength for active centering and responsive snapping
         nodes.forEach(n => {
-          const gravity = n.isAnchor ? 0.012 : 0.035;
+          const gravity = n.isFolder ? 0.003 : 0.005;
           n.vx -= n.x * gravity;
           n.vy -= n.y * gravity;
           n.vz -= n.z * gravity;
         });
 
-        // Apply velocity & damping
+        // Apply velocity
         nodes.forEach(n => {
-          const damping = n.isAnchor ? 0.95 : 0.82;
-          n.vx *= damping;
-          n.vy *= damping;
-          n.vz *= damping;
+          n.vx *= 0.85;
+          n.vy *= 0.85;
+          n.vz *= 0.85;
           
-          // Cap node velocity to completely prevent numerical overshooting/explosion
-          const maxSpeed = 7.0;
-          const speed = Math.sqrt(n.vx * n.vx + n.vy * n.vy + n.vz * n.vz);
+          // Speed limit to prevent flying away/crashing
+          const speed = Math.sqrt(n.vx*n.vx + n.vy*n.vy + n.vz*n.vz);
+          const maxSpeed = 10.0;
           if (speed > maxSpeed) {
             n.vx = (n.vx / speed) * maxSpeed;
             n.vy = (n.vy / speed) * maxSpeed;
@@ -2097,7 +2533,6 @@ function Interactive3DGraph({ documents, onSelectNode, fontScale = 'normal' }) {
       const outlineColor = bodyStyle.getPropertyValue('--color-outline-variant').trim() || '#444';
       const textColor = bodyStyle.getPropertyValue('--color-on-background').trim() || '#fff';
 
-      // Sort nodes by depth (draw back elements first)
       const sortedNodes = [...nodes].sort((a, b) => b.depth - a.depth);
       
       const scaleMap = {
@@ -2121,36 +2556,36 @@ function Interactive3DGraph({ documents, onSelectNode, fontScale = 'normal' }) {
         ctx.beginPath();
         ctx.moveTo(na.screenX, na.screenY);
         ctx.lineTo(nb.screenX, nb.screenY);
-        ctx.strokeStyle = outlineColor;
-        ctx.globalAlpha = opacity * 0.25;
-        ctx.lineWidth = (na.isCluster || nb.isCluster) ? 0.75 : 0.5;
+        
+        // Folder links are dotted/subtle, wiki-links are solid
+        const isFolderLink = na.isFolder || nb.isFolder;
+        ctx.strokeStyle = isFolderLink ? 'rgba(234, 179, 8, 0.4)' : outlineColor;
+        ctx.lineWidth = isFolderLink ? 0.8 : 1.2;
+        ctx.setLineDash(isFolderLink ? [3, 3] : []);
+        
+        ctx.globalAlpha = opacity * 0.35;
         ctx.stroke();
+        ctx.setLineDash([]); // Reset
         ctx.globalAlpha = 1.0;
       });
 
       // Draw Nodes
       sortedNodes.forEach(n => {
-        if (n.isAnchor) return; // Anchor nodes are invisible physics objects
+        const baseSize = n.isFolder ? 8 : 4;
+        const size = Math.max(2.5, baseSize * n.projectedScale * state.zoom);
+        const maxDepth = 400;
+        const opacity = Math.max(0.1, 1 - (n.depth + 200) / maxDepth);
 
         const isHovered = state.hoveredNode && state.hoveredNode.id === n.id;
         
-        // Base node size
-        let size = Math.max(2.0, (n.isCluster ? 9 : 5.0) * n.projectedScale * state.zoom);
-        const maxDepth = 400;
-        const opacity = Math.max(0.08, 1 - (n.depth + 200) / maxDepth);
 
         // Node folder coloring
         let color = primaryColor;
-        if (n.folder === 'snp500 report') color = secondaryColor;
-        else if (n.folder === 'llmwiki chat') color = '#10b981';
-        else if (n.folder === 'macro report') color = '#f59e0b';
-        else if (n.folder === 'knowledge/macro') color = '#f59e0b';
-        else if (n.folder === 'knowledge/institutions') color = '#ec4899';
-        else if (n.folder === 'knowledge/people') color = '#a855f7';
-        else if (n.folder === 'knowledge/tech_themes') color = '#06b6d4';
-        else if (n.folder === 'knowledge/industries') color = '#0d9488';
-        else if (n.folder === 'knowledge/segments') color = '#6366f1';
-        else if (n.folder === 'knowledge/drafts') color = '#94a3b8';
+        if (n.isFolder) {
+          color = getFolderColor(n.title);
+        } else {
+          color = getFolderColor(n.folder);
+        }
         
         // 1) Outer soft radial glow
         ctx.beginPath();
@@ -2160,7 +2595,7 @@ function Interactive3DGraph({ documents, onSelectNode, fontScale = 'normal' }) {
         grad.addColorStop(0.3, color);
         grad.addColorStop(1, 'transparent');
         ctx.fillStyle = grad;
-        ctx.globalAlpha = isHovered ? 0.8 : opacity * (n.isCluster ? 0.6 : 0.4);
+        ctx.globalAlpha = opacity * 0.55;
         ctx.fill();
 
         // 2) Node center core
@@ -2182,29 +2617,53 @@ function Interactive3DGraph({ documents, onSelectNode, fontScale = 'normal' }) {
         
         ctx.globalAlpha = 1.0;
 
-        // 3) LOD Label Optimization
-        // Skip drawing labels when zoom is extremely low and node is not hovered to improve FPS
-        const shouldDrawLabel = isHovered || (state.zoom > 0.65 && opacity > 0.4);
+        // Confidence warning rings for files containing [UNVERIFIED] or [AMBIGUOUS]
+        const isUnverified = !n.isFolder && n.docRef && n.docRef.content && n.docRef.content.includes('[UNVERIFIED]');
+        const isAmbiguous = !n.isFolder && n.docRef && n.docRef.content && n.docRef.content.includes('[AMBIGUOUS]');
         
-        if (shouldDrawLabel) {
-          const baseSize = isHovered 
-            ? 11 
-            : (n.isCluster ? 9.5 : 9);
-          const scaledSize = baseSize * fontScaleVar;
-          ctx.font = `${isHovered || n.isCluster ? 'bold ' : ''}${scaledSize}px sans-serif`;
-            
-          const text = n.title.length > 20 ? `${n.title.substring(0, 20)}...` : n.title;
+        if (isUnverified) {
+          const pulse = (Math.sin(Date.now() / 150) + 1) / 2;
+          ctx.beginPath();
+          ctx.arc(n.screenX, n.screenY, size * 2.0, 0, 2 * Math.PI);
+          ctx.strokeStyle = `rgba(239, 68, 68, ${0.4 + pulse * 0.6 * opacity})`;
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash([2, 2]);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        } else if (isAmbiguous) {
+          const pulse = (Math.sin(Date.now() / 250) + 1) / 2;
+          ctx.beginPath();
+          ctx.arc(n.screenX, n.screenY, size * 1.8, 0, 2 * Math.PI);
+          ctx.strokeStyle = `rgba(249, 115, 22, ${0.4 + pulse * 0.5 * opacity})`;
+          ctx.lineWidth = 1.2;
+          ctx.setLineDash([1, 2]);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+
+        // Label drawing
+        const isHovered = state.hoveredNode && state.hoveredNode.id === n.id;
+        if (isHovered || opacity > 0.45 || nodes.length < 30 || n.isFolder) {
+          ctx.font = isHovered ? 'bold 11px sans-serif' : '9px sans-serif';
+          
+          let text = n.title;
+          if (n.isFolder) {
+            const displayName = FOLDER_DISPLAY_NAMES[n.title] || n.title;
+            text = `📁 ${displayName} (${n.fileCount})`;
+          }
+          
+          if (text.length > 22) text = `${text.substring(0, 22)}...`;
           const textWidth = ctx.measureText(text).width;
 
           ctx.save();
-          ctx.globalAlpha = isHovered ? 1.0 : opacity * 0.85;
+          ctx.globalAlpha = isHovered ? 1.0 : (n.isFolder ? opacity * 0.95 : opacity * 0.75);
 
-          if (isHovered) {
-            ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
+          if (isHovered || n.isFolder) {
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
             ctx.strokeStyle = color;
-            ctx.lineWidth = 1.5;
-            const rectW = textWidth + 14;
-            const rectH = 20;
+            ctx.lineWidth = 1;
+            const rectW = textWidth + 12;
+            const rectH = 18;
             const rx = n.screenX - rectW / 2;
             const ry = n.screenY - size - rectH - 6;
             ctx.beginPath();
@@ -2212,10 +2671,9 @@ function Interactive3DGraph({ documents, onSelectNode, fontScale = 'normal' }) {
             ctx.fill();
             ctx.stroke();
 
-            ctx.fillStyle = '#fff';
-            ctx.fillText(text, rx + 7, ry + 13.5);
+            ctx.fillStyle = n.isFolder ? '#fef08a' : '#fff';
+            ctx.fillText(text, rx + 6, ry + 12);
           } else {
-            // Standard Label text below node
             ctx.fillStyle = textColor;
             ctx.shadowColor = 'rgba(0,0,0,0.8)';
             ctx.shadowBlur = 3;
@@ -2237,7 +2695,6 @@ function Interactive3DGraph({ documents, onSelectNode, fontScale = 'normal' }) {
     };
   }, []);
 
-  // Mouse Interaction Handlers
   const handleMouseDown = (e) => {
     const state = stateRef.current;
     state.dragging = true;
@@ -2260,15 +2717,15 @@ function Interactive3DGraph({ documents, onSelectNode, fontScale = 'normal' }) {
       state.pitch = Math.max(-Math.PI / 3, Math.min(Math.PI / 3, state.pitch + dy * 0.005));
       state.dragStart = { x: e.clientX, y: e.clientY };
     } else {
-      // Hover detection
       let closest = null;
-      let minDist = 22; // hover radius
+      let minDist = 25; // larger hover threshold
       state.nodes.forEach(n => {
         if (n.isAnchor) return;
         const dx = n.screenX - mouseX;
         const dy = n.screenY - mouseY;
         const dist = Math.sqrt(dx*dx + dy*dy);
-        if (dist < minDist) {
+        const radius = n.isFolder ? 25 : 15;
+        if (dist < radius && dist < minDist) {
           closest = n;
           minDist = dist;
         }
@@ -2285,12 +2742,10 @@ function Interactive3DGraph({ documents, onSelectNode, fontScale = 'normal' }) {
   const handleClick = (e) => {
     const state = stateRef.current;
     if (state.hoveredNode) {
-      if (state.hoveredNode.isCluster) {
-        // Toggle expansion of clicked Cluster folder node
+      if (state.hoveredNode.isFolder) {
         toggleFolder(state.hoveredNode.folder);
       } else {
-        // Select regular document node to preview it
-        onSelectNode(state.hoveredNode.docRef);
+        showDocumentPopup(state.hoveredNode.title);
       }
     }
   };
@@ -2344,7 +2799,7 @@ function Interactive3DGraph({ documents, onSelectNode, fontScale = 'normal' }) {
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-container-lowest/80 backdrop-blur-sm z-20 transition-all duration-500">
           <div className="w-12 h-12 rounded-full border-4 border-primary/20 border-t-primary animate-spin mb-4" />
           <p className="text-sm font-bold text-on-surface animate-pulse">지식 그래프 시뮬레이션을 준비하고 있습니다...</p>
-          <p className="text-[11px] text-outline mt-1">지식 노드 매핑 및 클러스터 3차원 투영 계산 중</p>
+          <p className="text-[11px] text-outline mt-1">지식 노드 매핑 및 3차원 위치 계산 중</p>
         </div>
       )}
       
@@ -2364,38 +2819,174 @@ function Interactive3DGraph({ documents, onSelectNode, fontScale = 'normal' }) {
           className="w-10 h-10 rounded-xl glass border border-outline-variant/50 flex items-center justify-center shadow-lg hover:bg-surface transition-all text-on-surface"
           title="Zoom In"
         >
-          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-zoom-in"><circle cx="11" cy="11" r="8"/><line x1="21" x2="16.65" y1="21" y2="16.65"/><line x1="11" x2="11" y1="8" y2="14"/><line x1="8" x2="14" y1="11" y2="11"/></svg>
+          <ZoomIn size={18} />
         </button>
         <button 
           onClick={handleZoomOut}
           className="w-10 h-10 rounded-xl glass border border-outline-variant/50 flex items-center justify-center shadow-lg hover:bg-surface transition-all text-on-surface"
           title="Zoom Out"
         >
-          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-zoom-out"><circle cx="11" cy="11" r="8"/><line x1="21" x2="16.65" y1="21" y2="16.65"/><line x1="8" x2="14" y1="11" y2="11"/></svg>
+          <ZoomOut size={18} />
+        </button>
+        <button 
+          onClick={handleResetGraphView}
+          className="w-10 h-10 rounded-xl glass border border-outline-variant/50 flex items-center justify-center shadow-lg transition-all text-on-surface hover:bg-surface"
+          title="지식 그래프 초기화"
+        >
+          <RefreshCw size={18} />
         </button>
         <button 
           onClick={handleToggleAutoRotate}
-          className="w-10 h-10 rounded-xl glass border border-outline-variant/50 flex items-center justify-center shadow-lg hover:bg-surface transition-all text-on-surface"
-          title="Toggle Auto-Rotation"
+          className="w-10 h-10 rounded-xl glass border border-outline-variant/50 flex items-center justify-center shadow-lg transition-all text-on-surface hover:bg-surface"
+          title="자동 회전 토글"
         >
-          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-compass"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>
-        </button>
-        <button 
-          onClick={handleResetLayout}
-          className="w-10 h-10 rounded-xl glass border border-outline-variant/50 flex items-center justify-center shadow-lg hover:bg-surface transition-all text-on-surface"
-          title="Reset Graph Layout"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-refresh-cw"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>
+          <RotateCw size={18} />
         </button>
       </div>
 
+      {/* Floating Category Legend Panel */}
+      <div className="absolute top-6 right-6 z-20 bg-surface/75 border border-outline-variant/30 backdrop-blur-lg rounded-2xl shadow-2xl p-4 flex flex-col gap-2.5 max-w-[240px] select-none">
+        <div className="flex items-center gap-1.5 border-b border-outline-variant/30 pb-2 shrink-0">
+          <span className="material-symbols-outlined text-[18px] text-primary">palette</span>
+          <span className="font-bold text-xs text-on-surface">온톨로지 범례 (Legend)</span>
+        </div>
+        <div className="space-y-1.5 text-[10px] text-on-surface-variant max-h-[280px] overflow-y-auto pr-1">
+          {[
+            { label: '거시경제 (Macro)', color: '#38bdf8' },
+            { label: '기술테마 (Tech Themes)', color: '#c084fc' },
+            { label: '산업 (Industries)', color: '#34d399' },
+            { label: '세부 부문 (Segments)', color: '#2dd4bf' },
+            { label: '기관/기업 (Institutions)', color: '#fb923c' },
+            { label: '인물 (People)', color: '#f472b6' },
+            { label: '초안 (Drafts)', color: '#a3a3a3' },
+            { label: '미국 시장 (USA)', color: '#60a5fa' },
+            { label: '결정화 대화 (Chat)', color: '#eab308' },
+            { label: '기타 분석 보고서', color: '#6366f1' }
+          ].map(item => (
+            <div key={item.label} className="flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: item.color }} />
+              <span className="truncate">{item.label}</span>
+            </div>
+          ))}
+        </div>
+        <div className="border-t border-outline-variant/30 pt-2 flex flex-col gap-1.5">
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full border border-dashed border-red-500 shrink-0 animate-pulse" />
+            <span className="text-[9px] text-red-400 font-semibold">[UNVERIFIED] 미검증 경고</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full border border-dotted border-orange-400 shrink-0" />
+            <span className="text-[9px] text-orange-400 font-semibold">[AMBIGUOUS] 모호함 경고</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Floating File Explorer Panel */}
+      {isExplorerMinimized ? (
+        <button 
+          onClick={() => setIsExplorerMinimized(false)}
+          className="absolute top-6 left-6 z-20 w-10 h-10 rounded-xl glass border border-primary/30 flex items-center justify-center shadow-lg hover:scale-105 active:scale-95 transition-all text-primary hover:bg-surface-container"
+          title="지식 탐색기 열기"
+        >
+          <span className="material-symbols-outlined text-[20px]">account_tree</span>
+        </button>
+      ) : (
+        <div 
+          style={{ width: `${explorerSize.width}px`, height: `${explorerSize.height}px` }}
+          className="absolute top-6 left-6 z-20 bg-surface/75 border border-outline-variant/30 backdrop-blur-lg rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+        >
+          {/* Panel Header */}
+          <div className="p-3 bg-surface-container border-b border-outline-variant/30 flex items-center justify-between shrink-0 select-none">
+            <div className="flex items-center gap-1.5">
+              <span className="material-symbols-outlined text-[18px] text-primary">account_tree</span>
+              <span className="font-bold text-xs text-on-surface">지식 탐색 트리 (Explorer)</span>
+            </div>
+            <button 
+              onClick={() => setIsExplorerMinimized(true)}
+              className="p-1 hover:bg-outline-variant/30 rounded text-outline hover:text-on-surface transition-colors"
+              title="최소화"
+            >
+              <Minimize2 size={14} />
+            </button>
+          </div>
+
+          {/* Panel Body (Tree Structure) */}
+          <div className="flex-1 overflow-y-auto p-3 space-y-1.5 select-none">
+            {Object.keys(foldersMap).sort().map(folderName => {
+              const isOpen = expandedFolders.has(folderName);
+              const docsInFolder = foldersMap[folderName];
+              const displayName = FOLDER_DISPLAY_NAMES[folderName] || folderName;
+              return (
+                <div key={folderName} className="space-y-1">
+                  <div 
+                    onClick={() => toggleFolder(folderName)}
+                    className="flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs cursor-pointer hover:bg-surface-container-high text-on-surface font-semibold transition-all"
+                  >
+                    <div className="flex items-center gap-1.5 truncate">
+                      <ChevronRight 
+                        size={12} 
+                        className={`transition-transform duration-200 text-outline shrink-0 ${isOpen ? 'rotate-90' : ''}`}
+                      />
+                      <span className="material-symbols-outlined text-[16px] text-amber-500 shrink-0">
+                        {isOpen ? 'folder_open' : 'folder'}
+                      </span>
+                      <span className="truncate">{displayName}</span>
+                    </div>
+                    <span className="text-[9px] text-outline font-mono bg-surface-container-highest px-1.5 py-0.5 rounded-full shrink-0">
+                      {docsInFolder.length}
+                    </span>
+                  </div>
+                  
+                  {isOpen && (
+                    <div className="pl-3.5 border-l border-outline-variant/20 ml-4 space-y-0.5 py-0.5">
+                      {docsInFolder.map(doc => (
+                        <div 
+                          key={doc.path}
+                          onClick={() => showDocumentPopup(doc.title)}
+                          className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] cursor-pointer hover:bg-surface-container-high text-on-surface-variant hover:text-primary transition-all truncate"
+                        >
+                          <FileText size={11} className="shrink-0 text-primary/70" />
+                          <span className="truncate">{doc.title}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Resize Handle at Bottom-Right */}
+          <div 
+            onMouseDown={handleResizeMouseDown}
+            className="absolute bottom-0 right-0 w-4 h-4 cursor-se-resize flex items-end justify-end p-0.5"
+            style={{ zIndex: 10 }}
+          >
+            <svg width="8" height="8" viewBox="0 0 10 10" className="text-outline/40 fill-current">
+              <path d="M10,0 L10,10 L0,10 Z M6,10 L10,10 L10,6 Z M2,10 L10,10 L10,2 Z" />
+            </svg>
+          </div>
+        </div>
+      )}
+
       {hoveredInfo && (
         <div className="absolute top-6 right-6 p-4 rounded-xl glass border border-outline-variant/50 max-w-xs shadow-2xl pointer-events-none select-none z-10 animate-fade-in text-xs space-y-1.5">
-          <div className="font-bold text-on-surface text-[13px]">{hoveredInfo.title}</div>
+          <div className="font-bold text-on-surface text-[13px]">
+            {hoveredInfo.isFolder ? `📁 폴더: ${hoveredInfo.title}` : hoveredInfo.title}
+          </div>
           <div className="flex gap-2">
-            <span className="text-[10px] uppercase font-semibold text-primary px-1.5 py-0.5 rounded bg-primary/10">{hoveredInfo.folder}</span>
-            {hoveredInfo.isCluster && (
-              <span className="text-[10px] uppercase font-semibold text-emerald-500 px-1.5 py-0.5 rounded bg-emerald-500/10">Cluster</span>
+            <span className="text-[10px] uppercase font-semibold text-primary px-1.5 py-0.5 rounded bg-primary/10">
+              {hoveredInfo.isFolder ? 'Folder' : hoveredInfo.folder}
+            </span>
+            {!hoveredInfo.isFolder && hoveredInfo.category && (
+              <span className="text-[10px] uppercase font-semibold text-secondary px-1.5 py-0.5 rounded bg-secondary/10">
+                {hoveredInfo.category}
+              </span>
+            )}
+            {hoveredInfo.isFolder && (
+              <span className="text-[10px] uppercase font-semibold text-amber-500 px-1.5 py-0.5 rounded bg-amber-500/10">
+                문서 {hoveredInfo.fileCount}개 포함
+              </span>
             )}
           </div>
         </div>

@@ -8,15 +8,47 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, List
+from fastapi import Depends, Header
 
 # Set vault path
-VAULT_DIR = os.environ.get("VAULT_DIR", "G:\\내 드라이브\\agent-guru\\agent-guru")
+VAULT_DIR = os.getenv("VAULT_DIR", "G:\\내 드라이브\\agent-guru\\agent-guru")
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 
 sys.path.append(BACKEND_DIR)
 import search_engine
 import agent_harness
 import resource_checker
+
+
+# Passcode Auth config
+import hashlib
+ACCESS_CODE = os.getenv("ACCESS_CODE", "")
+if ACCESS_CODE:
+    # Use a deterministic SHA-256 hash of the access code as the session token
+    # so that the token is identical across all container instances and persists across restarts.
+    SESSION_TOKEN = hashlib.sha256(f"agent-guru-session-salt:{ACCESS_CODE}".encode("utf-8")).hexdigest()
+else:
+    SESSION_TOKEN = "local_dev_token"
+
+class LoginModel(BaseModel):
+    passcode: str
+
+class VerifySessionModel(BaseModel):
+    token: str
+
+def verify_auth_token(authorization: Optional[str] = Header(None)):
+    # Bypass auth if ACCESS_CODE is not configured (prevents locking out before configuration)
+    if not ACCESS_CODE:
+        return "local_dev_user"
+        
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="인증 토큰이 누락되었습니다.")
+    
+    token = authorization.split(" ")[1]
+    if token != SESSION_TOKEN:
+        raise HTTPException(status_code=401, detail="유효하지 않거나 만료된 세션 토큰입니다.")
+        
+    return "authenticated_user"
 
 app = FastAPI(title="Agent-Guru LLM Wiki Server", version="1.0.0")
 
@@ -31,10 +63,11 @@ app.add_middleware(
 
 class QueryModel(BaseModel):
     query: str
-    model_mode: Optional[str] = "local"
+    model_mode: Optional[str] = "normal"
     draft_path: Optional[str] = None
     is_modification_mode: Optional[bool] = False
     chat_history: Optional[List] = []
+    approved_searches: Optional[List[str]] = None
 
 class ImproveModel(BaseModel):
     rule: str
@@ -42,19 +75,54 @@ class ImproveModel(BaseModel):
 class PublishModel(BaseModel):
     draft_path: str
 
+
+@app.get("/api/auth/config")
+def get_auth_config():
+    return {"is_auth_enabled": bool(ACCESS_CODE)}
+
+@app.post("/api/auth/login")
+def login_endpoint(payload: LoginModel):
+    if not ACCESS_CODE:
+        return {"status": "success", "token": "local_dev_token"}
+    if payload.passcode == ACCESS_CODE:
+        return {"status": "success", "token": SESSION_TOKEN}
+    else:
+        raise HTTPException(status_code=401, detail="비밀번호가 올바르지 않습니다.")
+
+@app.post("/api/auth/verify")
+def verify_session_endpoint(payload: VerifySessionModel):
+    if not ACCESS_CODE:
+        return {"status": "success"}
+    if payload.token == SESSION_TOKEN:
+        return {"status": "success"}
+    else:
+        raise HTTPException(status_code=401, detail="유효하지 않은 세션입니다.")
+
 @app.get("/api/status")
-def get_resource_status():
+def get_resource_status(current_user: str = Depends(verify_auth_token)):
     """
-    Returns if the local model resource is currently busy with background scheduled tasks.
+    Returns the database (vault) latest update status and document count.
     """
-    busy = resource_checker.check_resource_busy()
+    docs = search_engine.get_all_cached_documents()
+    doc_count = len(docs)
+    
+    last_updated_time = search_engine.cache_last_updated
+    if last_updated_time > 0:
+        import datetime
+        dt = datetime.datetime.fromtimestamp(last_updated_time)
+        last_updated_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+    else:
+        last_updated_str = "기록 없음"
+        
     return {
-        "busy": busy,
-        "message": "로컬 리소스 사용 중" if busy else "대기 중"
+        "busy": False,
+        "doc_count": doc_count,
+        "last_updated": last_updated_str,
+        "status": "연동 완료" if doc_count > 0 else "동기화 필요"
     }
 
 @app.get("/api/documents")
-def list_documents(query: str = ""):
+def list_documents(query: str = "", current_user: str = Depends(verify_auth_token)):
     """
     Lists and searches documents across the entire vault.
     If query is empty, lists all documents.
@@ -79,7 +147,7 @@ def list_documents(query: str = ""):
         return results
 
 @app.get("/api/documents/detail")
-def get_document_detail(path: str):
+def get_document_detail(path: str, current_user: str = Depends(verify_auth_token)):
     """
     Retrieves the raw markdown content of any document in the vault by its path.
     """
@@ -106,7 +174,7 @@ def get_document_detail(path: str):
         raise HTTPException(status_code=500, detail=f"Failed to read file: {e}")
 
 @app.post("/api/chat")
-async def chat_endpoint(payload: QueryModel):
+async def chat_endpoint(payload: QueryModel, current_user: str = Depends(verify_auth_token)):
     """
     SSE Streaming endpoint triggering the Fable-5 Agentic Harness loop.
     """
@@ -129,7 +197,8 @@ async def chat_endpoint(payload: QueryModel):
             model_mode=model_mode, 
             draft_path=draft_path, 
             chat_history=chat_history,
-            is_modification_mode=is_modification_mode
+            is_modification_mode=is_modification_mode,
+            approved_searches=payload.approved_searches
         ), 
     )
 
@@ -151,7 +220,7 @@ async def approve_search(payload: SearchApprovalModel):
         raise HTTPException(status_code=404, detail="Active search approval request not found or already processed.")
 
 @app.post("/api/documents/publish")
-def publish_document(payload: PublishModel):
+def publish_document(payload: PublishModel, current_user: str = Depends(verify_auth_token)):
     """
     Moves a draft file from knowledge/drafts/ to llmwiki chat/
     and adds it to linktree.md
@@ -233,7 +302,7 @@ def publish_document(payload: PublishModel):
         raise HTTPException(status_code=500, detail=f"발행 실패: {e}")
 
 @app.post("/api/documents/clear_drafts")
-def clear_drafts():
+def clear_drafts(current_user: str = Depends(verify_auth_token)):
     """
     Clears all files in the drafts directory to reset the notepad.
     """
@@ -254,7 +323,7 @@ def clear_drafts():
     return {"status": "success", "message": "임시 초안 폴더가 초기화되었습니다."}
 
 @app.post("/api/improve")
-def improve_endpoint(payload: ImproveModel):
+def improve_endpoint(payload: ImproveModel, current_user: str = Depends(verify_auth_token)):
     """
     Appends a new user-initiated behavioral rule to .agents/AGENTS.md
     """
@@ -264,6 +333,22 @@ def improve_endpoint(payload: ImproveModel):
         return {"status": "success", "message": f"규칙이 시스템 가이드라인에 추가되었습니다: '{rule}'"}
     else:
         raise HTTPException(status_code=500, detail="시스템 규칙 추가 실패")
+
+
+# Mount React frontend static files for deployment (if they exist)
+frontend_dist = os.path.abspath(os.path.join(os.path.dirname(BACKEND_DIR), "frontend", "dist"))
+if os.path.exists(frontend_dist):
+    from fastapi.staticfiles import StaticFiles
+    from fastapi.responses import FileResponse
+    
+    print(f"Serving static frontend files from: {frontend_dist}")
+    app.mount("/assets", StaticFiles(directory=os.path.join(frontend_dist, "assets")), name="assets")
+    
+    @app.get("/{catchall:path}")
+    def serve_frontend_spa(catchall: str):
+        if catchall.startswith("api/"):
+            raise HTTPException(status_code=404, detail="API route not found")
+        return FileResponse(os.path.join(frontend_dist, "index.html"))
 
 if __name__ == "__main__":
     import uvicorn

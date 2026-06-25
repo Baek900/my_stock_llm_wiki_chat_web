@@ -11,10 +11,9 @@ import asyncio
 
 
 # Explicitly point to the Google Drive Obsidian Vault directory
-VAULT_DIR = "G:\\내 드라이브\\agent-guru\\agent-guru"
+VAULT_DIR = os.getenv("VAULT_DIR", "G:\\내 드라이브\\agent-guru\\agent-guru")
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
-SCRIPTS_DIR = os.path.join(VAULT_DIR, "workflow", "scripts")
-sys.path.append(SCRIPTS_DIR)
+sys.path.append(BACKEND_DIR)
 
 # Dynamically import scripts from vault workflow folder
 import local_llm
@@ -61,23 +60,15 @@ def prepare_search_approval(query):
     ]
     return request_id, event, events
 
-
-
 async def query_local_model_sync(prompt, temperature=0.2, model_mode="local", target_model=None):
     """
     Helper to run a quick non-streaming completion asynchronously in a thread pool.
     """
-    is_cloud = (model_mode in ["cloud", "turbo"])
+    is_cloud = (model_mode in ["cloud", "turbo", "normal"])
     messages = [{"role": "user", "content": prompt}]
     
     if not target_model:
-        if is_cloud:
-            if model_mode == "turbo":
-                target_model = "gemini-3.1-pro"
-            else:
-                target_model = "gemini-3.1-flash-lite"
-        else:
-            target_model = MODEL_NAME
+        target_model = MODEL_NAME
             
     # Run the blocking network/local LLM call in a background thread to keep event loop free
     res = await asyncio.to_thread(
@@ -86,7 +77,7 @@ async def query_local_model_sync(prompt, temperature=0.2, model_mode="local", ta
         messages,
         temperature=temperature,
         force_local=not is_cloud,
-        direct_local=not is_cloud
+        model_mode=model_mode
     )
     return res
 
@@ -349,7 +340,17 @@ async def save_report_to_wiki(query, full_response, local_refs=None, web_refs=No
         "tags": ["research/report", f"concept/{summary_text}"]
     }
     
-    body_content = f"# {query}\n\n{full_response}\n\n## 🔗 참고 자료 및 출처\n"
+    # Strip any frontmatter if the LLM output accidentally contains one
+    _, clean_response = parse_frontmatter(full_response.strip())
+    clean_response = clean_response.strip()
+    
+    # Strip markdown code blocks if the model wrapped the entire response
+    if clean_response.startswith("```markdown") and clean_response.endswith("```"):
+        clean_response = clean_response[11:-3].strip()
+    elif clean_response.startswith("```") and clean_response.endswith("```"):
+        clean_response = clean_response[3:-3].strip()
+        
+    body_content = f"# {query}\n\n{clean_response}\n\n## 🔗 참고 자료 및 출처\n"
     if unique_local:
         body_content += "### 📂 내부 지식 문서\n"
         for doc in unique_local:
@@ -626,7 +627,8 @@ async def generate_guru_portfolio_loop(query, guru_names, model_mode="cloud", dr
     if draft_path and os.path.exists(draft_path):
         try:
             with open(draft_path, "r", encoding="utf-8", errors="ignore") as f:
-                draft_content = f.read()
+                raw_draft = f.read()
+                _, draft_content = parse_frontmatter(raw_draft)
         except:
             pass
 
@@ -754,7 +756,7 @@ async def generate_guru_portfolio_loop(query, guru_names, model_mode="cloud", dr
         except Exception:
             pass
 
-async def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_history=None, is_modification_mode=False):
+async def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_history=None, is_modification_mode=False, approved_searches=None):
     """
     Generator implementing the Fable-5 Agentic Harness loop.
     Yields JSON events for SSE stream.
@@ -974,7 +976,7 @@ async def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_h
         matched_docs_info = []
         web_refs = []
         web_search_count = 0
-        max_web_searches = 2
+        max_web_searches = 4
         
         # 1) Search local vault for all queries in parallel
         yield sse_yield({"type": "thought", "text": f"서브 쿼리 {len(queries)}개에 대한 병렬 로컬 RAG 지식 검색을 시작합니다..."})
@@ -1049,13 +1051,30 @@ async def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_h
                     웹 검색 결과를 바탕으로, 이 정보를 Obsidian 지식 위키에 저장할 수 있도록 표준 형식의 마크다운 위키 페이지를 작성해 주세요.
                     반드시 아래 YAML frontmatter 형식을 첫머리에 포함해야 하며, 텍스트 설명 외의 사설은 생략하세요.
                     
+                    [카테고리 분류 규칙]
+                    frontmatter의 category 필드에는 다음 6개 공식 카테고리 중 하나만 지정하십시오:
+                    - Macroeconomics
+                    - Institutions
+                    - People
+                    - Tech Themes
+                    - Industries
+                    - Segments
+
+                    [신뢰도 태깅 규칙 (Andrej Karpathy llm-wiki)]
+                    본문 설명 내에 팩트나 수치가 서술될 때, 사실의 끝부분에 출처의 확실성에 맞춰 다음 신뢰도 태그 중 하나를 의무적으로 붙이십시오:
+                    - `[EXTRACTED]`: 원문 검색 결과에 직접적으로 명시된 확실한 사실
+                    - `[INFERRED]`: 논리적으로 추론된 유도된 사실
+                    - `[AMBIGUOUS]`: 원문의 서술이 모호하거나 충돌하는 모호한 내용
+                    - `[UNVERIFIED]`: 확인되지 않은 소문, 루머 또는 추정치
+                    예시: "엔비디아의 2026년 가동률은 98%에 달할 것으로 예상된다.[UNVERIFIED]"
+
                     [웹 검색 자료]
                     {flashlight_result}
                     
                     출력 형식 예시:
                     ---
                     type: knowledge-term
-                    category: Deep Tech (또는 Macroeconomics, AI 등 알맞은 카테고리)
+                    category: Tech Themes
                     related_terms:
                       - "[[관련개념1]]"
                     tags:
@@ -1086,14 +1105,36 @@ async def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_h
                         concept_title = title_match.group(1).strip() if title_match else q
                         concept_title = re.sub(r'[\\/*?:"<>|]', '', concept_title)
                         
-                        wiki_path = os.path.join(VAULT_DIR, "knowledge", f"{concept_title}.md")
+                        # Extract category from YAML frontmatter
+                        category_val = "Macroeconomics"
+                        cat_match = re.search(r'^category:\s*(.*)$', wiki_content, re.MULTILINE)
+                        if cat_match:
+                            category_val = cat_match.group(1).strip()
+
+                        # Determine category subfolder
+                        subfolder = "macro"
+                        cat_lower = category_val.lower()
+                        if "macro" in cat_lower or "economy" in cat_lower or "market" in cat_lower or "금융" in cat_lower or "금리" in cat_lower:
+                            subfolder = "macro"
+                        elif "people" in cat_lower or "person" in cat_lower or "인물" in cat_lower or "창립자" in cat_lower:
+                            subfolder = "people"
+                        elif "institution" in cat_lower or "company" in cat_lower or "기관" in cat_lower or "기업" in cat_lower or "org" in cat_lower:
+                            subfolder = "institutions"
+                        elif "tech" in cat_lower or "ai" in cat_lower or "기술" in cat_lower or "theme" in cat_lower or "과학" in cat_lower:
+                            subfolder = "tech_themes"
+                        elif "industry" in cat_lower or "산업" in cat_lower or "섹터" in cat_lower:
+                            subfolder = "industries"
+                        elif "segment" in cat_lower or "분야" in cat_lower or "부문" in cat_lower:
+                            subfolder = "segments"
+                        
+                        wiki_path = os.path.join(VAULT_DIR, "knowledge", subfolder, f"{concept_title}.md")
                         try:
                             os.makedirs(os.path.dirname(wiki_path), exist_ok=True)
                             with open(wiki_path, "w", encoding="utf-8") as f:
                                 f.write(wiki_content)
                             yield sse_yield({
                                 "type": "thought", 
-                                "text": f"새로운 위키 문서 생성 완료: [knowledge/{concept_title}.md](file:///{wiki_path.replace(chr(92), '/')})"
+                                "text": f"새로운 위키 문서 생성 완료: [knowledge/{subfolder}/{concept_title}.md](file:///{wiki_path.replace(chr(92), '/')})"
                             })
                         except Exception as ex:
                             yield sse_yield({"type": "thought", "text": f"위키 문서 저장 실패: {ex}"})
@@ -1151,15 +1192,23 @@ async def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_h
         if draft_path and os.path.exists(draft_path):
             try:
                 with open(draft_path, "r", encoding="utf-8", errors="ignore") as f:
-                    draft_content = f.read()
+                    raw_draft = f.read()
+                    _, draft_content = parse_frontmatter(raw_draft)
             except:
                 pass
+
+        custom_rules_part = f"[사용자 지정 추가 규칙]\n{custom_rules}" if custom_rules else ""
+        draft_update_part = f"[이전 초안 보고서 수정요청]\n귀하는 이미 작성된 초안 보고서를 바탕으로 사용자의 추가 요청사항을 반영하여 보고서를 갱신해야 합니다. 기존 내용을 최대한 보존하며 수정하십시오:\n{draft_content}" if draft_content else ""
 
         if draft_content:
             system_instruction = f"""
         당신은 글로벌 리서치 허브 에이전트 Agent-Guru입니다.
         사용자의 추가 수정/보완 요청에 따라, 아래 제공된 [컨텍스트 정보]를 참조하여 기존에 작성된 [기존 초안 보고서]의 내용을 **부분적으로 보충 및 수정**해 주세요.
         
+        [신뢰도 인지 지침 (Andrej Karpathy llm-wiki)]
+        컨텍스트 정보의 문장이나 팩트 뒤에 붙은 신뢰도 어노테이션 태그(`[EXTRACTED]`, `[INFERRED]`, `[AMBIGUOUS]`, `[UNVERIFIED]`)를 인지하여 답변에 반영하세요.
+        특히 `[UNVERIFIED]`(미검증) 또는 `[AMBIGUOUS]`(모호함) 정보가 포함되어 있다면, 답변 내에 해당 사실을 인용할 때 '이 정보는 아직 검증되지 않은 정보(UNVERIFIED)를 포함합니다' 또는 '출처가 모호한 사실(AMBIGUOUS)입니다'라는 경고/주의 문구를 명시적으로 부착해 주십시오.
+
         CRITICAL WARNING: 기존 보고서의 뼈대와 내용을 대량 삭제하거나 전면적으로 새로 작성(리팩토링)하지 마십시오!
         반드시 아래 3단계를 수행하여 수정해야 합니다:
         1. [수정사항 확인]: 사용자의 수정 요구 및 질문을 명확히 확인합니다.
@@ -1175,7 +1224,7 @@ async def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_h
         [사용자의 추가 수정/보완 요청사항]
         {query}
         
-        {f'[사용자 지정 추가 규칙]\n{custom_rules}' if custom_rules else ''}
+        {custom_rules_part}
         """
         else:
             system_instruction = f"""
@@ -1186,9 +1235,13 @@ async def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_h
         [컨텍스트 정보]
         {context_text}
         
-        {f'[사용자 지정 추가 규칙]\n{custom_rules}' if custom_rules else ''}
+        [신뢰도 인지 지침 (Andrej Karpathy llm-wiki)]
+        컨텍스트 정보의 문장이나 팩트 뒤에 붙은 신뢰도 어노테이션 태그(`[EXTRACTED]`, `[INFERRED]`, `[AMBIGUOUS]`, `[UNVERIFIED]`)를 인지하여 답변에 반영하세요.
+        특히 `[UNVERIFIED]`(미검증) 또는 `[AMBIGUOUS]`(모호함) 정보가 포함되어 있다면, 답변 내에 해당 사실을 인용할 때 '이 정보는 아직 검증되지 않은 정보(UNVERIFIED)를 포함합니다' 또는 '출처가 모호한 사실(AMBIGUOUS)입니다'라는 경고/주의 문구를 명시적으로 부착해 주십시오.
         
-        {f'[이전 초안 보고서 수정요청]\n귀하는 이미 작성된 초안 보고서를 바탕으로 사용자의 추가 요청사항을 반영하여 보고서를 갱신해야 합니다. 기존 내용을 최대한 보존하며 수정하십시오:\n{draft_content}' if draft_content else ''}
+        {custom_rules_part}
+        
+        {draft_update_part}
         """
         
         messages = [{"role": "system", "content": system_instruction}]
@@ -1262,10 +1315,10 @@ async def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_h
 
 async def generate_streaming_completion(messages, temperature=0.3, max_tokens=8192, model_mode="local"):
     """
-    Tries Cloud API first (if model_mode == 'cloud' or 'turbo'), and falls back to local Lemonade Server on failure.
+    Tries Cloud API first (if model_mode in ['normal', 'turbo', 'cloud']), and falls back to local Lemonade Server on failure.
     If model_mode == 'local', calls local model directly.
     """
-    is_cloud = (model_mode in ["cloud", "turbo"])
+    is_cloud = (model_mode in ["cloud", "turbo", "normal"])
     if not is_cloud:
         log("Forcing direct local model completion...")
         try:
@@ -1275,7 +1328,7 @@ async def generate_streaming_completion(messages, temperature=0.3, max_tokens=81
                 messages,
                 temperature=temperature,
                 force_local=True,
-                direct_local=True
+                model_mode=model_mode
             )
             if res:
                 chunk_size = 50
@@ -1291,13 +1344,14 @@ async def generate_streaming_completion(messages, temperature=0.3, max_tokens=81
     # Cloud/Turbo mode: try Cloud first
     target_model = "gemini-3.1-pro" if model_mode == "turbo" else "gemini-3.5-flash"
     try:
-        log(f"Streaming: calling Antigravity Cloud API (Model: {target_model})...")
+        log(f"Streaming: calling Cloud Gemini API with model_mode={model_mode}...")
         res = await asyncio.to_thread(
             local_llm.generate_chat_completion,
-            target_model,
+            MODEL_NAME,
             messages,
             temperature=temperature,
-            force_local=False
+            force_local=False,
+            model_mode=model_mode
         )
         if res:
             chunk_size = 50
