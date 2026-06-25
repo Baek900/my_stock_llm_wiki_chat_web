@@ -896,8 +896,6 @@ function App() {
       setSearchApprovalRequest(null);
     }
   };
-    }
-  };
 
   const handleChatSubmit = async (e) => {
     e.preventDefault();
@@ -1197,7 +1195,6 @@ function App() {
 
         {/* Tab Links */}
         <nav className="flex-1 px-4 space-y-1 overflow-y-auto">
-          <button 
           <button 
             onClick={() => setActiveTab('landing')}
             className={`w-full flex items-center px-4 py-3 rounded-xl transition-all ${
@@ -1969,7 +1966,6 @@ function App() {
           </button>
         )}
       </div>
-      )}
 
       {/* Document Detail Popup Modal */}
       {isPopupOpen && popupDoc && (
@@ -2201,18 +2197,6 @@ function Interactive3DGraph({ documents, onSelectNode, showDocumentPopup }) {
     return map;
   }, [documents]);
 
-  const toggleFolder = (folderName) => {
-    setExpandedFolders(prev => {
-      const next = new Set(prev);
-      if (next.has(folderName)) {
-        next.delete(folderName);
-      } else {
-        next.add(folderName);
-      }
-      return next;
-    });
-  };
-
   // Initialize and update nodes/links dynamically
   React.useEffect(() => {
     if (!documents || documents.length === 0) {
@@ -2329,10 +2313,6 @@ function Interactive3DGraph({ documents, onSelectNode, showDocumentPopup }) {
       if (!expandedFolders.has(docAFolder)) return;
       
       const sourceNode = fileNodes.find(n => n.id === docA.path);
-      if (!sourceNode) return;
-      
-      const sourceId = isAExpanded ? docA.path : `cluster-${folderA}`;
-      const sourceNode = nodes.find(n => n.id === sourceId);
       if (!sourceNode) return;
 
       const docALinks = docA.links || [];
@@ -2642,7 +2622,6 @@ function Interactive3DGraph({ documents, onSelectNode, showDocumentPopup }) {
         }
 
         // Label drawing
-        const isHovered = state.hoveredNode && state.hoveredNode.id === n.id;
         if (isHovered || opacity > 0.45 || nodes.length < 30 || n.isFolder) {
           ctx.font = isHovered ? 'bold 11px sans-serif' : '9px sans-serif';
           
