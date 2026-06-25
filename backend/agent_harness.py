@@ -44,10 +44,9 @@ def log(msg):
 # Global dictionary to track active search approvals: {request_id: {"event": asyncio.Event(), "approved": bool}}
 active_search_approvals = {}
 
-async def request_search_approval(query, model_mode):
+def prepare_search_approval(query):
     """
-    Suspends execution to wait for user's search approval.
-    Returns: (approved, list_of_sse_events)
+    Prepares search approval event and returns request_id, event, and list of initial sse events.
     """
     request_id = f"req_{int(time.time() * 1000)}"
     event = asyncio.Event()
@@ -60,19 +59,8 @@ async def request_search_approval(query, model_mode):
         sse_yield({"type": "search_approval_required", "request_id": request_id, "query": query}),
         sse_yield({"type": "thought", "text": f"👤 사용자의 웹 검색 승인을 기다리고 있습니다... (검색어: '{query}')"})
     ]
-    
-    # Wait for the event (set by main.py endpoint)
-    await event.wait()
-    
-    approval_data = active_search_approvals.pop(request_id, {})
-    approved = approval_data.get("approved", False)
-    
-    if approved:
-        events.append(sse_yield({"type": "thought", "text": "✅ 웹 검색 승인됨. DuckDuckGo 실시간 검색을 수행합니다."}))
-    else:
-        events.append(sse_yield({"type": "thought", "text": "❌ 웹 검색 거부됨. 기존 지식만으로 답변을 합성합니다."}))
-        
-    return approved, events
+    return request_id, event, events
+
 
 
 async def query_local_model_sync(prompt, temperature=0.2, model_mode="local", target_model=None):
@@ -988,13 +976,17 @@ async def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_h
         web_search_count = 0
         max_web_searches = 2
         
-        for q_idx, q in enumerate(queries):
-            yield sse_yield({"type": "thought", "text": f"쿼리 [{q_idx+1}/{len(queries)}] 실행 중: '{q}'"})
-            
-            # 1) Search local vault
-            local_results = await asyncio.to_thread(search_engine.search_local_vault, q, limit=3)
-            
-            # Determine if local match score is low (< 150), empty, or contains invalid/error content
+        # 1) Search local vault for all queries in parallel
+        yield sse_yield({"type": "thought", "text": f"서브 쿼리 {len(queries)}개에 대한 병렬 로컬 RAG 지식 검색을 시작합니다..."})
+        local_search_tasks = [asyncio.to_thread(search_engine.search_local_vault, q, limit=3) for q in queries]
+        local_search_results = await asyncio.gather(*local_search_tasks)
+        
+        queries_needing_web_search = []
+        queries_with_local_matches = []
+        
+        # Evaluate local match quality for each query
+        for idx, q in enumerate(queries):
+            local_results = local_search_results[idx]
             has_high_quality_match = False
             if local_results:
                 best_res = local_results[0]
@@ -1004,7 +996,6 @@ async def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_h
                 is_error_content = any(err in snippet.lower() for err in ["404 not found", "http error", "error: http error", "exception occurred"])
                 is_too_short = len(snippet) < 100
                 
-                # Check if the query term or any synonyms/concepts actually appear in the snippet/body
                 search_terms = [q.lower()] + [s.lower() for s in synonyms if isinstance(s, str)] + [c.lower() for c in core_concepts if isinstance(c, str)]
                 search_terms = [t for t in search_terms if t]
                 term_in_body = any(t in snippet.lower() for t in search_terms)
@@ -1013,85 +1004,117 @@ async def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_h
                     has_high_quality_match = True
                 else:
                     log(f"Local match '{best_res['title']}' rejected as high quality (score={max_score}, is_error={is_error_content}, too_short={is_too_short}, term_in_body={term_in_body})")
+            
+            if has_high_quality_match:
+                queries_with_local_matches.append((q, local_results))
+            else:
+                queries_needing_web_search.append(q)
+                
+        # 2) Fallback to External Flashlight Search for missing queries
+        # Cap to max web searches
+        queries_to_search = queries_needing_web_search[:max_web_searches]
+        
+        if queries_to_search:
+            combined_q = ", ".join(queries_to_search)
+            request_id, approved_event, approval_events = prepare_search_approval(combined_q)
+            for ev in approval_events:
+                yield ev
+                
+            # Wait for user approval/rejection (suspended generator)
+            await approved_event.wait()
+            
+            approval_data = active_search_approvals.pop(request_id, {})
+            approved = approval_data.get("approved", False)
+            
+            if approved:
+                yield sse_yield({"type": "thought", "text": f"✅ 웹 검색 승인됨. {len(queries_to_search)}개 키워드에 대한 DuckDuckGo 실시간 병렬 검색을 수행합니다."})
+                
+                # Fetch web search results in parallel
+                web_search_tasks = [asyncio.to_thread(web_searcher.search_web, q, limit=5) for q in queries_to_search]
+                web_search_results = await asyncio.gather(*web_search_tasks)
+                
+                # Generate new Wiki contents concurrently
+                wiki_tasks = []
+                for s_idx, q in enumerate(queries_to_search):
+                    web_results = web_search_results[s_idx]
+                    if not web_results:
+                        continue
+                        
+                    for r in web_results:
+                        web_refs.append((r['title'], r['url']))
+                        
+                    flashlight_result = "\n\n".join([f"Title: {r['title']}\nURL: {r['url']}\nSnippet: {r['snippet']}" for r in web_results])
                     
-            if not has_high_quality_match:
-                # 2) Fallback to External Flashlight Search
-                if web_search_count < max_web_searches:
-                    approved, approval_events = await request_search_approval(q, model_mode)
-                    for ev in approval_events:
-                        yield ev
+                    wiki_prompt = f"""
+                    웹 검색 결과를 바탕으로, 이 정보를 Obsidian 지식 위키에 저장할 수 있도록 표준 형식의 마크다운 위키 페이지를 작성해 주세요.
+                    반드시 아래 YAML frontmatter 형식을 첫머리에 포함해야 하며, 텍스트 설명 외의 사설은 생략하세요.
+                    
+                    [웹 검색 자료]
+                    {flashlight_result}
+                    
+                    출력 형식 예시:
+                    ---
+                    type: knowledge-term
+                    category: Deep Tech (또는 Macroeconomics, AI 등 알맞은 카테고리)
+                    related_terms:
+                      - "[[관련개념1]]"
+                    tags:
+                      - knowledge/definition
+                      - concept/{q}
+                    ---
+                    # [{q}]
+                    
+                    ## 정의
+                    ...
+                    
+                    ## 주요 내용
+                    ...
+                    """
+                    wiki_tasks.append((q, query_local_model_sync(wiki_prompt, temperature=0.2, model_mode=model_mode)))
+                
+                if wiki_tasks:
+                    yield sse_yield({"type": "thought", "text": f"웹 RAG 정보 수집 완료. {len(wiki_tasks)}개 지식 위키 문서 자동 작성을 병렬로 시작합니다..."})
+                    
+                    task_queries = [t[0] for t in wiki_tasks]
+                    task_coros = [t[1] for t in wiki_tasks]
+                    wiki_contents = await asyncio.gather(*task_coros)
+                    
+                    # Save all generated documents
+                    for s_idx, wiki_content in enumerate(wiki_contents):
+                        q = task_queries[s_idx]
+                        title_match = re.search(r'^#\s+(.*)$', wiki_content, re.MULTILINE)
+                        concept_title = title_match.group(1).strip() if title_match else q
+                        concept_title = re.sub(r'[\\/*?:"<>|]', '', concept_title)
                         
-                    web_results = []
-                    if approved:
-                        yield sse_yield({"type": "thought", "text": f"⚠️ 로컬 검색 매칭 부족 (매칭 점수 미달 또는 없음). 외부 실시간 웹 탐색(Flashlight Search) 실행: '{q}'"})
+                        wiki_path = os.path.join(VAULT_DIR, "knowledge", f"{concept_title}.md")
                         try:
-                            web_results = await asyncio.to_thread(web_searcher.search_web, q, limit=5)
-                        except Exception as e:
-                            pass
-                        
-                        web_search_count += 1
-                        
-                        if web_results:
-                            for r in web_results:
-                                web_refs.append((r['title'], r['url']))
-                                
-                            flashlight_result = "\n\n".join([f"Title: {r['title']}\nURL: {r['url']}\nSnippet: {r['snippet']}" for r in web_results])
+                            os.makedirs(os.path.dirname(wiki_path), exist_ok=True)
+                            with open(wiki_path, "w", encoding="utf-8") as f:
+                                f.write(wiki_content)
+                            yield sse_yield({
+                                "type": "thought", 
+                                "text": f"새로운 위키 문서 생성 완료: [knowledge/{concept_title}.md](file:///{wiki_path.replace(chr(92), '/')})"
+                            })
+                        except Exception as ex:
+                            yield sse_yield({"type": "thought", "text": f"위키 문서 저장 실패: {ex}"})
                             
-                            # 3) Generate new Wiki content from web results
-                            yield sse_yield({"type": "thought", "text": f"웹 RAG 정보 획득 완료. 지식 위키 자동 갱신 및 저장 중..."})
-                            
-                            wiki_prompt = f"""
-                            웹 검색 결과를 바탕으로, 이 정보를 Obsidian 지식 위키에 저장할 수 있도록 표준 형식의 마크다운 위키 페이지를 작성해 주세요.
-                            반드시 아래 YAML frontmatter 형식을 첫머리에 포함해야 하며, 텍스트 설명 외의 사설은 생략하세요.
-                            
-                            [웹 검색 자료]
-                            {flashlight_result}
-                            
-                            출력 형식 예시:
-                            ---
-                            type: knowledge-term
-                            category: Deep Tech (또는 Macroeconomics, AI 등 알맞은 카테고리)
-                            related_terms:
-                              - "[[관련개념1]]"
-                            tags:
-                              - knowledge/definition
-                              - concept/검색어
-                            ---
-                            # [개념명]
-                            
-                            ## 정의
-                            ...
-                            
-                            ## 주요 내용
-                            ...
-                            """
-                            
-                            wiki_content = await query_local_model_sync(wiki_prompt, temperature=0.2, model_mode=model_mode)
-                            
-                            # Parse title to save
-                            title_match = re.search(r'^#\s+(.*)$', wiki_content, re.MULTILINE)
-                            concept_title = title_match.group(1).strip() if title_match else q
-                            concept_title = re.sub(r'[\\/*?:"<>|]', '', concept_title)
-                            
-                            wiki_path = os.path.join(VAULT_DIR, "knowledge", f"{concept_title}.md")
-                            try:
-                                os.makedirs(os.path.dirname(wiki_path), exist_ok=True)
-                                with open(wiki_path, "w", encoding="utf-8") as f:
-                                    f.write(wiki_content)
-                                yield sse_yield({
-                                    "type": "thought", 
-                                    "text": f"새로운 위키 문서 생성 완료: [knowledge/{concept_title}.md](file:///{wiki_path.replace(chr(92), '/')})"
-                                })
-                                
-                                # Force cache reload so it is indexable
-                                await asyncio.to_thread(search_engine.update_document_cache, force=True)
-                                
-                                # Re-run local search for this query to get the newly created document
-                                local_results = await asyncio.to_thread(search_engine.search_local_vault, q, limit=3)
-                            except Exception as ex:
-                                yield sse_yield({"type": "thought", "text": f"위키 문서 저장 실패: {ex}"})
-                            
-            # 4) Process and collect search results
+                    # Force cache reload ONCE in a batch
+                    yield sse_yield({"type": "thought", "text": f"새로 저장된 {len(wiki_contents)}개 위키 지식들에 대해 데이터베이스를 일괄 업데이트(배치 리로드)하고 있습니다..."})
+                    await asyncio.to_thread(search_engine.update_document_cache, force=True)
+                    
+                    # Re-run local search for these queries to gather the newly created documents
+                    post_search_tasks = [asyncio.to_thread(search_engine.search_local_vault, q, limit=3) for q in queries_to_search]
+                    post_search_results = await asyncio.gather(*post_search_tasks)
+                    
+                    for s_idx, q in enumerate(queries_to_search):
+                        queries_with_local_matches.append((q, post_search_results[s_idx]))
+            else:
+                yield sse_yield({"type": "thought", "text": "❌ 외부 검색 거부됨. 기존 지식만으로 답변을 합성합니다."})
+                
+        # 3) Process and collect search results in the original queries order
+        query_to_results = {q: res for q, res in queries_with_local_matches}
+        for q in queries:
+            local_results = query_to_results.get(q, [])
             for r in local_results:
                 collected_context.append(f"## 문서: {r['title']} (카테고리: {r['folder']})\n{r['snippet']}")
                 matched_docs_info.append(r)
