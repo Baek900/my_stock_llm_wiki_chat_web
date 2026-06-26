@@ -104,8 +104,10 @@ def generate_chat_completion(model_name, messages, temperature=0.3, max_tokens=8
                 gemini_model = "gemini-3.1-pro-preview"
             elif model_mode == "normal":
                 gemini_model = "gemini-3.5-flash"
-            else:
+            elif model_mode == "default":
                 gemini_model = "gemini-3.1-flash-lite"
+            else:
+                gemini_model = "gemini-3.5-flash"
         elif running_on_gcp or project_id:
             log(f"Initializing Vertex AI client (Project: {project_id}, Location: {location})")
             kwargs = {}
@@ -113,11 +115,13 @@ def generate_chat_completion(model_name, messages, temperature=0.3, max_tokens=8
                 kwargs["project"] = project_id
             client = genai.Client(vertexai=True, location=location, **kwargs)
             if model_mode == "turbo":
-                gemini_model = "gemini-2.5-pro"
+                gemini_model = "gemini-3.1-pro-preview"
             elif model_mode == "normal":
-                gemini_model = "gemini-2.5-flash"
+                gemini_model = "gemini-3.5-flash"
+            elif model_mode == "default":
+                gemini_model = "gemini-3.1-flash-lite"
             else:
-                gemini_model = "gemini-2.5-flash-lite"
+                gemini_model = "gemini-3.5-flash"
         else:
             raise ValueError(
                 "Google Cloud Project ID 또는 GEMINI_API_KEY가 감지되지 않았습니다. "

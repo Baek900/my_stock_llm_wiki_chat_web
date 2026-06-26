@@ -3,7 +3,7 @@ import os
 import tempfile
 import subprocess
 
-LOCK_FILE = os.path.join(tempfile.gettempdir(), "agent_guru_local_llm.lock")
+LOCK_FILE = os.path.join(tempfile.gettempdir(), "agent_guru_api_llm.lock")
 
 def is_process_alive(pid):
     """

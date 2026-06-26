@@ -44,14 +44,42 @@ def update_document_cache(force=False):
     """
     Loads all markdown files in the vault into memory synchronously.
     Uses a 5-second TTL to avoid redundant reads within the same API request flow
-    while ensuring maximum freshness.
+    while ensuring maximum freshness. On GCP, it uses the JSON cache file.
     """
     global doc_cache, cache_last_updated
     
+    running_on_gcp = os.getenv("RUNNING_ON_GCP", "false").lower() == "true"
     now = time.time()
-    if len(doc_cache) > 0:
-        if not force and (now - cache_last_updated) < 5:
+    
+    if running_on_gcp:
+        # On GCP Cloud Run, avoid expensive full directory walks completely.
+        # We rely on the persisted document_index.json which is loaded on startup.
+        if len(doc_cache) > 0 and not force:
             return
+        
+        # If empty or forced, try to load from the JSON cache file.
+        cache_file = os.path.join(VAULT_DIR, ".cache", "document_index.json")
+        if os.path.exists(cache_file):
+            try:
+                import json
+                start_t = time.time()
+                with open(cache_file, "r", encoding="utf-8") as f:
+                    doc_cache = json.load(f)
+                cache_last_updated = time.time()
+                print(f"[CACHE-LOAD-GCP] Loaded {len(doc_cache)} documents from persisted index in {time.time() - start_t:.3f}s")
+                return
+            except Exception as e:
+                print(f"[CACHE-LOAD-GCP-ERROR] Failed to load persisted index: {e}")
+        
+        # Fallback to scan only if cache file is missing entirely and we have no data
+        if len(doc_cache) > 0:
+            return
+            
+    else:
+        # Local mode: Standard TTL-based scanning
+        if len(doc_cache) > 0:
+            if not force and (now - cache_last_updated) < 5:
+                return
             
     # Perform scan synchronously to ensure correctness and prevent race conditions
     _perform_cache_scan(force=force)
@@ -389,6 +417,74 @@ def search_local_vault(query, limit=5):
             
     results_list.sort(key=lambda x: x["score"], reverse=True)
     return results_list[:limit]
+
+def add_or_update_doc_in_cache(doc_data):
+    """
+    Directly adds or updates a document in the in-memory cache and persists it to JSON.
+    Also syncs to SQLite and Vector DB if we are not running on GCP or if they succeed.
+    """
+    global doc_cache, cache_last_updated
+    with cache_lock:
+        # Remove existing if any
+        doc_cache = [d for d in doc_cache if d["path"] != doc_data["path"]]
+        doc_cache.append(doc_data)
+        cache_last_updated = time.time()
+        
+        # Save to persisted JSON cache
+        cache_file = os.path.join(VAULT_DIR, ".cache", "document_index.json")
+        try:
+            cache_dir = os.path.dirname(cache_file)
+            os.makedirs(cache_dir, exist_ok=True)
+            import json
+            with open(cache_file, "w", encoding="utf-8") as f:
+                json.dump(doc_cache, f, ensure_ascii=False)
+            print(f"[CACHE-SAVE] Successfully saved updated index to {cache_file}")
+        except Exception as e:
+            print(f"[CACHE-SAVE] Failed to save updated index: {e}")
+            
+        # Sync to SQLite and Vector DB (wrapped to prevent crashes)
+        try:
+            import database
+            database.save_document_to_db(doc_data)
+        except Exception as e:
+            print(f"[CACHE-SYNC-DB] Failed to sync to SQLite: {e}")
+            
+        try:
+            import vector_db
+            vector_db.add_document_to_vector_db(doc_data["path"], doc_data["title"], doc_data["content"])
+        except Exception as e:
+            print(f"[CACHE-SYNC-VEC] Failed to sync to Vector DB: {e}")
+
+def delete_doc_from_cache(doc_path):
+    """
+    Removes a document from the in-memory cache and persists the change.
+    """
+    global doc_cache, cache_last_updated
+    with cache_lock:
+        doc_cache = [d for d in doc_cache if d["path"] != doc_path]
+        cache_last_updated = time.time()
+        
+        cache_file = os.path.join(VAULT_DIR, ".cache", "document_index.json")
+        try:
+            import json
+            with open(cache_file, "w", encoding="utf-8") as f:
+                json.dump(doc_cache, f, ensure_ascii=False)
+            print(f"[CACHE-DELETE] Successfully saved updated index after deleting {doc_path}")
+        except Exception as e:
+            print(f"[CACHE-DELETE] Failed to save updated index: {e}")
+            
+        # Sync to SQLite and Vector DB
+        try:
+            import database
+            database.delete_document_from_db(doc_path)
+        except Exception as e:
+            print(f"[CACHE-DELETE-DB] Failed to delete from SQLite: {e}")
+            
+        try:
+            import vector_db
+            vector_db.delete_document_from_vector_db(doc_path)
+        except Exception as e:
+            print(f"[CACHE-DELETE-VEC] Failed to delete from Vector DB: {e}")
 
 if __name__ == "__main__":
     print("Testing hybrid search for 'RAG'...")

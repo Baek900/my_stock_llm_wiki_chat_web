@@ -1,7 +1,5 @@
 # -*- coding: utf-8 -*-
 import os
-import chromadb
-from chromadb.utils import embedding_functions
 
 # Retrieve VAULT_DIR from env or fallback to local path
 VAULT_DIR = os.environ.get("VAULT_DIR", "G:\\내 드라이브\\agent-guru\\agent-guru")
@@ -28,6 +26,9 @@ def get_vector_db_collection():
     global _client, _collection
     if _collection is not None:
         return _collection
+
+    import chromadb
+    from chromadb.utils import embedding_functions
 
     # Ensure storage folder exists
     os.makedirs(CHROMA_PATH, exist_ok=True)

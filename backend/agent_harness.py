@@ -16,7 +16,7 @@ BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(BACKEND_DIR)
 
 # Dynamically import scripts from vault workflow folder
-import local_llm
+import api_llm
 import search_engine
 import web_searcher
 import resource_checker
@@ -60,23 +60,22 @@ def prepare_search_approval(query):
     ]
     return request_id, event, events
 
-async def query_local_model_sync(prompt, temperature=0.2, model_mode="local", target_model=None):
+async def query_local_model_sync(prompt, temperature=0.2, model_mode="normal", target_model=None):
     """
     Helper to run a quick non-streaming completion asynchronously in a thread pool.
     """
-    is_cloud = (model_mode in ["cloud", "turbo", "normal"])
     messages = [{"role": "user", "content": prompt}]
     
     if not target_model:
         target_model = MODEL_NAME
             
-    # Run the blocking network/local LLM call in a background thread to keep event loop free
+    # Run the blocking network LLM call in a background thread to keep event loop free
     res = await asyncio.to_thread(
-        local_llm.generate_chat_completion,
+        api_llm.generate_chat_completion,
         target_model,
         messages,
         temperature=temperature,
-        force_local=not is_cloud,
+        force_local=False,
         model_mode=model_mode
     )
     return res
@@ -708,7 +707,7 @@ async def generate_guru_portfolio_loop(query, guru_names, model_mode="cloud", dr
         prompt += f"\n\n[사용자 지정 추가 규칙]\n{custom_rules}"
 
     try:
-        load_success = await asyncio.to_thread(local_llm.load_model, MODEL_NAME)
+        load_success = await asyncio.to_thread(api_llm.load_model, MODEL_NAME)
         if not load_success:
             yield sse_yield({"type": "status", "status": "error", "message": "로컬 모델 구동에 실패했습니다. 서버 상태를 점검해 주세요."})
             return
@@ -752,7 +751,7 @@ async def generate_guru_portfolio_loop(query, guru_names, model_mode="cloud", dr
             
     finally:
         try:
-            local_llm.unload_model(MODEL_NAME)
+            api_llm.unload_model(MODEL_NAME)
         except Exception:
             pass
 
@@ -856,7 +855,7 @@ async def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_h
         yield sse_yield({"type": "thought", "text": "일반 대화 모드로 전환하여 답변을 생성하고 있습니다..."})
         
         full_response = ""
-        for chunk_type, chunk_text in generate_streaming_completion(messages, model_mode=model_mode):
+        async for chunk_type, chunk_text in generate_streaming_completion(messages, model_mode=model_mode):
             if chunk_text and chunk_type == "content":
                 full_response += chunk_text
                 yield sse_yield({"type": "content", "text": chunk_text})
@@ -906,7 +905,7 @@ async def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_h
     
     try:
         if not is_cloud:
-            load_success = await asyncio.to_thread(local_llm.load_model, MODEL_NAME)
+            load_success = await asyncio.to_thread(api_llm.load_model, MODEL_NAME)
             if not load_success:
                 yield sse_yield({"type": "status", "status": "error", "message": "로컬 모델 구동에 실패했습니다. 서버 상태를 점검해 주세요."})
                 return
@@ -1254,7 +1253,7 @@ async def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_h
         messages.append({"role": "user", "content": query})
         
         full_response = ""
-        for chunk_type, chunk_text in generate_streaming_completion(messages, model_mode=model_mode):
+        async for chunk_type, chunk_text in generate_streaming_completion(messages, model_mode=model_mode):
             if chunk_text:
                 if chunk_type == "content":
                     full_response += chunk_text
@@ -1308,7 +1307,7 @@ async def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_h
     finally:
         if not is_cloud:
             try:
-                await asyncio.to_thread(local_llm.unload_model, MODEL_NAME)
+                await asyncio.to_thread(api_llm.unload_model, MODEL_NAME)
             except Exception:
                 pass
 
@@ -1323,7 +1322,7 @@ async def generate_streaming_completion(messages, temperature=0.3, max_tokens=81
         log("Forcing direct local model completion...")
         try:
             res = await asyncio.to_thread(
-                local_llm.generate_chat_completion,
+                api_llm.generate_chat_completion,
                 MODEL_NAME,
                 messages,
                 temperature=temperature,
@@ -1346,7 +1345,7 @@ async def generate_streaming_completion(messages, temperature=0.3, max_tokens=81
     try:
         log(f"Streaming: calling Cloud Gemini API with model_mode={model_mode}...")
         res = await asyncio.to_thread(
-            local_llm.generate_chat_completion,
+            api_llm.generate_chat_completion,
             MODEL_NAME,
             messages,
             temperature=temperature,

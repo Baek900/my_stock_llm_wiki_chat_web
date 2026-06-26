@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { 
   Search, BookOpen, MessageSquare, ShieldAlert, Cpu, 
-  ChevronRight, RefreshCw, Sun, Moon, ArrowRight, Check, X,
+  ChevronRight, ChevronLeft, RefreshCw, Sun, Moon, ArrowRight, Check, X,
   FileText, Globe, Lightbulb, Network, ZoomIn, ZoomOut, Maximize2, Minimize2, Eye, Type, RotateCw
 } from 'lucide-react';
 import './App.css';
@@ -196,6 +196,77 @@ function App() {
   const [popupDoc, setPopupDoc] = useState(null);
   const [popupContent, setPopupContent] = useState('');
   const [isPopupOpen, setIsPopupOpen] = useState(false);
+
+  // Booklet states
+  const [windowWidth, setWindowWidth] = useState(window.innerWidth);
+  const [bookletMode, setBookletMode] = useState('booklet'); // 'scroll' | 'booklet'
+  const [bookletTheme, setBookletTheme] = useState('sepia'); // 'sepia' | 'white' | 'dark'
+  const [bookletFontSize, setBookletFontSize] = useState('base'); // 'sm' | 'base' | 'lg' | 'xl'
+  const [bookletCurrentPage, setBookletCurrentPage] = useState(0); // page index (0-based)
+
+  // Report booklet states (for background reader)
+  const [reportBookletMode, setReportBookletMode] = useState('booklet'); // 'scroll' | 'booklet'
+  const [reportBookletTheme, setReportBookletTheme] = useState('white'); // 'sepia' | 'white' | 'dark'
+  const [reportBookletFontSize, setReportBookletFontSize] = useState('base'); // 'sm' | 'base' | 'lg' | 'xl'
+  const [reportBookletCurrentPage, setReportBookletCurrentPage] = useState(0); // page index (0-based)
+
+  useEffect(() => {
+    const handleResize = () => setWindowWidth(window.innerWidth);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  // Popup booklet keydown listener (strictly 1-page view)
+  useEffect(() => {
+    if (!isPopupOpen) return;
+    const handleKeyDown = (e) => {
+      // Ignore key events when user is typing in inputs or textareas
+      if (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA') {
+        return;
+      }
+      if (bookletMode !== 'booklet') return;
+      const pages = parseMarkdownToPages(popupContent);
+      if (e.key === 'ArrowLeft') {
+        setBookletCurrentPage(prev => Math.max(0, prev - 1));
+      } else if (e.key === 'ArrowRight') {
+        setBookletCurrentPage(prev => Math.min(pages.length - 1, prev + 1));
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isPopupOpen, bookletMode, popupContent]);
+
+  // Background report booklet keydown listener (2-page view on desktop)
+  useEffect(() => {
+    if (isPopupOpen) return; // Ignore background events when popup is active
+    if (!selectedDoc && !currentReportResponse) return;
+    const handleKeyDown = (e) => {
+      // Ignore key events when user is typing in inputs or textareas
+      if (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA') {
+        return;
+      }
+      if (reportBookletMode !== 'booklet') return;
+      
+      const content = selectedDoc ? docContent : currentReportResponse;
+      const pages = parseMarkdownToPages(content || '');
+      const isDoublePage = windowWidth >= 1024;
+      const step = isDoublePage ? 2 : 1;
+
+      if (e.key === 'ArrowLeft') {
+        setReportBookletCurrentPage(prev => {
+          const displayIndex = isDoublePage ? prev - (prev % 2) : prev;
+          return Math.max(0, displayIndex - step);
+        });
+      } else if (e.key === 'ArrowRight') {
+        setReportBookletCurrentPage(prev => {
+          const displayIndex = isDoublePage ? prev - (prev % 2) : prev;
+          return Math.min(pages.length - 1, displayIndex + step);
+        });
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedDoc, currentReportResponse, docContent, reportBookletMode, windowWidth, isPopupOpen]);
   
   // Chat states
   const [chatInput, setChatInput] = useState('');
@@ -414,6 +485,33 @@ function App() {
     return processed;
   };
 
+  const parseMarkdownToPages = (content) => {
+    if (!content) return [''];
+    
+    // Clean frontmatter if present
+    let cleaned = content.trim();
+    if (cleaned.startsWith('---')) {
+      const nextTripleDash = cleaned.indexOf('---', 3);
+      if (nextTripleDash !== -1) {
+        cleaned = cleaned.substring(nextTripleDash + 3).trim();
+      }
+    }
+
+    // Try splitting by horizontal rule lines
+    const hrRegex = /^\s*---\s*$/m;
+    if (hrRegex.test(cleaned)) {
+      const pages = cleaned.split(hrRegex).map(p => p.trim()).filter(Boolean);
+      if (pages.length > 0) return pages;
+    }
+
+    // Fallback: split by main headings (h2 '##')
+    const h2Regex = /(?=^##\s+)/m;
+    const pages = cleaned.split(h2Regex).map(p => p.trim()).filter(Boolean);
+    
+    if (pages.length === 0) return [''];
+    return pages;
+  };
+
   const findDocumentInList = (list, title) => {
     if (!list || list.length === 0) return null;
     const clean = title.replace(/\.md$/, '').trim().toLowerCase();
@@ -488,6 +586,7 @@ function App() {
         const data = await res.json();
         setPopupDoc(foundDoc);
         setPopupContent(data.content);
+        setBookletCurrentPage(0); // Reset page index
         setIsPopupOpen(true);
         console.log("Successfully opened popup for doc:", foundDoc.title);
       } catch (e) {
@@ -825,6 +924,7 @@ function App() {
 
   const selectDocument = async (doc) => {
     setSelectedDoc(doc);
+    setReportBookletCurrentPage(0); // Reset page index when selecting a new document
     if (doc.path && (doc.path.includes('knowledge/drafts') || doc.path.includes('knowledge\\drafts'))) {
       setActiveDraftPath(doc.path);
     } else {
@@ -882,7 +982,7 @@ function App() {
   const handleSearchApproval = async (approved) => {
     if (!searchApprovalRequest) return;
     try {
-      await fetch('http://127.0.0.1:8080/api/chat/approve_search', {
+      await fetch('/api/chat/approve_search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1582,65 +1682,150 @@ function App() {
                   </div>
                 )}
                 
-                {selectedDoc ? (
-                  <div className="max-w-3xl md:max-w-4xl lg:max-w-5xl xl:max-w-6xl mx-auto animate-in fade-in duration-300">
-                    <div className="mb-6 pb-4 border-b border-outline-variant/30 flex items-center justify-between">
-                      <div>
-                        <div className="flex items-center gap-1.5 text-xs text-outline mb-1">
-                          <BookOpen size={12} />
-                          <span>{selectedDoc.folder}</span>
-                        </div>
-                        <h2 className="text-2xl font-bold text-on-background">{selectedDoc.title}</h2>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        {selectedDoc.path && (selectedDoc.path.includes('knowledge/drafts') || selectedDoc.path.includes('knowledge\\drafts')) && (
-                          <button
-                            onClick={() => handlePublish(selectedDoc.path)}
-                            disabled={publishedPaths.has(selectedDoc.path)}
-                            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all ${
-                              publishedPaths.has(selectedDoc.path)
-                                ? 'bg-outline/20 text-on-surface/40 cursor-not-allowed'
-                                : 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                            }`}
-                          >
-                            <Check size={14} />
-                            <span>{publishedPaths.has(selectedDoc.path) ? '발행 완료' : '발행 및 저장'}</span>
-                          </button>
-                        )}
-                        <span className="text-xs px-3 py-1 bg-surface-container rounded-full text-on-surface-variant font-mono">
-                          {selectedDoc.category || '일반 지식'}
-                        </span>
-                      </div>
-                    </div>
+                {selectedDoc || currentReportResponse ? (() => {
+                  const reportContent = selectedDoc ? docContent : currentReportResponse;
+                  const reportPages = parseMarkdownToPages(reportContent || '');
+                  const isReportBooklet = reportBookletMode === 'booklet';
+                  const isReportDoublePage = isReportBooklet && windowWidth >= 1024;
+                  
+                  const reportCurrentPageClamped = Math.max(0, Math.min(reportBookletCurrentPage, reportPages.length - 1));
+                  const reportDisplayIndex = isReportDoublePage ? reportCurrentPageClamped - (reportCurrentPageClamped % 2) : reportCurrentPageClamped;
 
-                    <div className="markdown-body text-on-background">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: MarkdownLink }}>
-                        {preprocessMarkdown(docContent)}
-                      </ReactMarkdown>
-                    </div>
-                  </div>
-                ) : currentReportResponse ? (
-                  <div className="max-w-3xl md:max-w-4xl lg:max-w-5xl xl:max-w-6xl mx-auto">
-                    <div className="mb-6 pb-4 border-b border-outline-variant/30 flex items-center justify-between">
-                      <div>
-                        <div className="flex items-center gap-1.5 text-xs text-outline mb-1">
-                          <RefreshCw className="animate-spin text-primary" size={12} />
-                          <span className="text-primary font-bold">실시간 심층 리서치 보고서 작성 중...</span>
-                        </div>
-                        <h2 className="text-2xl font-bold text-on-background">AI 리서치 분석 결과</h2>
-                      </div>
-                      <span className="text-xs px-3 py-1 bg-primary/10 rounded-full text-primary font-mono animate-pulse">
-                        Generating...
-                      </span>
-                    </div>
+                  const reportThemeClass = reportBookletTheme === 'sepia'
+                    ? 'theme-paper-sepia'
+                    : reportBookletTheme === 'white'
+                      ? 'theme-paper-white'
+                      : 'theme-paper-dark';
 
-                    <div className="markdown-body text-on-background">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: MarkdownLink }}>
-                        {preprocessMarkdown(currentReportResponse)}
-                      </ReactMarkdown>
+                  const reportFontSizeClass = reportBookletFontSize === 'sm'
+                    ? 'text-sm'
+                    : reportBookletFontSize === 'lg'
+                      ? 'text-lg'
+                      : reportBookletFontSize === 'xl'
+                        ? 'text-xl'
+                        : 'text-base';
+
+                  const handleReportPrev = () => {
+                    const step = isReportDoublePage ? 2 : 1;
+                    setReportBookletCurrentPage(prev => Math.max(0, reportDisplayIndex - step));
+                  };
+
+                  const handleReportNext = () => {
+                    const step = isReportDoublePage ? 2 : 1;
+                    setReportBookletCurrentPage(prev => Math.min(reportPages.length - 1, reportDisplayIndex + step));
+                  };
+
+                  return (
+                    <div className="max-w-7xl mx-auto w-full flex flex-col animate-in fade-in duration-300">
+                      {/* Document Details Header */}
+                      <div className="mb-4 pb-4 border-b border-outline-variant/30 flex flex-col md:flex-row md:items-center justify-between gap-3 shrink-0">
+                        <div>
+                          {selectedDoc ? (
+                            <>
+                              <div className="flex items-center gap-1.5 text-xs text-outline mb-1 font-semibold">
+                                <BookOpen size={12} className="text-primary" />
+                                <span>{selectedDoc.folder}</span>
+                              </div>
+                              <h2 className="text-xl md:text-2xl font-bold text-on-background">{selectedDoc.title}</h2>
+                            </>
+                          ) : (
+                            <>
+                              <div className="flex items-center gap-1.5 text-xs text-outline mb-1 font-semibold">
+                                <RefreshCw className="animate-spin text-primary" size={12} />
+                                <span className="text-primary font-bold">실시간 심층 리서치 보고서 작성 중...</span>
+                              </div>
+                              <h2 className="text-xl md:text-2xl font-bold text-on-background">AI 리서치 분석 결과</h2>
+                            </>
+                          )}
+                        </div>
+                        
+                        <div className="flex items-center gap-2 flex-wrap shrink-0">
+                          {/* Booklet Option Bar */}
+                          <div className="flex items-center gap-3 bg-surface-container-low px-3 py-1.5 rounded-xl border border-outline-variant/20 shadow-sm">
+                            <div className="flex items-center gap-1.5">
+                              <button onClick={() => setReportBookletTheme('sepia')} className={`w-4 h-4 rounded-full bg-[#f3ece0] border transition-all ${reportBookletTheme === 'sepia' ? 'ring-2 ring-primary border-white scale-110 shadow-sm' : 'border-outline-variant/40 hover:scale-105'}`} title="세피아 미색지" />
+                              <button onClick={() => setReportBookletTheme('white')} className={`w-4 h-4 rounded-full bg-[#faf9f6] border transition-all ${reportBookletTheme === 'white' ? 'ring-2 ring-primary border-slate-300 scale-110 shadow-sm' : 'border-outline-variant/40 hover:scale-105'}`} title="백색지" />
+                              <button onClick={() => setReportBookletTheme('dark')} className={`w-4 h-4 rounded-full bg-[#1e1b18] border transition-all ${reportBookletTheme === 'dark' ? 'ring-2 ring-primary border-slate-600 scale-110 shadow-sm' : 'border-outline-variant/40 hover:scale-105'}`} title="다크 매거진" />
+                            </div>
+                            <div className="w-[1px] h-3.5 bg-outline-variant/30" />
+                            <div className="flex items-center gap-1">
+                              <button onClick={() => { if (reportBookletFontSize === 'xl') setReportBookletFontSize('lg'); else if (reportBookletFontSize === 'lg') setReportBookletFontSize('base'); else if (reportBookletFontSize === 'base') setReportBookletFontSize('sm'); }} disabled={reportBookletFontSize === 'sm'} className="w-5 h-5 flex items-center justify-center border border-outline-variant/50 rounded hover:bg-outline-variant/10 disabled:opacity-30 disabled:pointer-events-none text-[10px] font-bold text-on-background transition-colors" title="글자 크기 축소">A-</button>
+                              <span className="w-8 text-center text-[9px] text-outline font-bold uppercase select-none">{reportBookletFontSize}</span>
+                              <button onClick={() => { if (reportBookletFontSize === 'sm') setReportBookletFontSize('base'); else if (reportBookletFontSize === 'base') setReportBookletFontSize('lg'); else if (reportBookletFontSize === 'lg') setReportBookletFontSize('xl'); }} disabled={reportBookletFontSize === 'xl'} className="w-5 h-5 flex items-center justify-center border border-outline-variant/50 rounded hover:bg-outline-variant/10 disabled:opacity-30 disabled:pointer-events-none text-[10px] font-bold text-on-background transition-colors" title="글자 크기 확대">A+</button>
+                            </div>
+                            <div className="w-[1px] h-3.5 bg-outline-variant/30" />
+                            <button onClick={() => setReportBookletMode(reportBookletMode === 'booklet' ? 'scroll' : 'booklet')} className={`p-1 rounded-lg transition-all border ${reportBookletMode === 'booklet' ? 'bg-primary text-on-primary border-primary shadow-sm' : 'bg-transparent text-outline border-outline-variant/50 hover:bg-outline-variant/10 hover:text-on-background'}`} title={reportBookletMode === 'booklet' ? '종스크롤 아티클 모드로 변경' : '책자 넘김 매거진 모드로 변경'}>
+                              {reportBookletMode === 'booklet' ? <BookOpen size={14} /> : <FileText size={14} />}
+                            </button>
+                          </div>
+
+                          {selectedDoc && selectedDoc.path && (selectedDoc.path.includes('knowledge/drafts') || selectedDoc.path.includes('knowledge\drafts')) && (
+                            <button
+                              onClick={() => handlePublish(selectedDoc.path)}
+                              disabled={publishedPaths.has(selectedDoc.path)}
+                              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all ${
+                                publishedPaths.has(selectedDoc.path)
+                                  ? 'bg-outline/20 text-on-surface/40 cursor-not-allowed'
+                                  : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                              }`}
+                            >
+                              <Check size={14} />
+                              <span>{publishedPaths.has(selectedDoc.path) ? '발행 완료' : '발행 및 저장'}</span>
+                            </button>
+                          )}
+                          {selectedDoc ? (
+                            <span className="text-xs px-3 py-1 bg-surface-container rounded-full text-on-surface-variant font-mono">
+                              {selectedDoc.category || '일반 지식'}
+                            </span>
+                          ) : (
+                            <span className="text-xs px-3 py-1 bg-primary/10 rounded-full text-primary font-mono animate-pulse">
+                              Generating...
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Booklet or Scroll Content */}
+                      {isReportBooklet ? (
+                        <div className={`flex-1 flex relative overflow-hidden rounded-2xl border border-outline-variant/30 shadow-md min-h-[550px] h-[65vh] ${reportThemeClass}`}>
+                          {/* Left Page */}
+                          <div className={`flex-1 overflow-y-auto p-8 md:p-12 markdown-body serif-article ${reportFontSizeClass} ${reportDisplayIndex === 0 ? 'first-page drop-cap' : ''} book-page-shadow-left`}>
+                            <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: MarkdownLink }}>{preprocessMarkdown(reportPages[reportDisplayIndex])}</ReactMarkdown>
+                            <div className="mt-8 text-xs opacity-50 text-center font-semibold select-none border-t border-outline-variant/10 pt-4">{reportDisplayIndex + 1} / {reportPages.length}</div>
+                          </div>
+                          
+                          {isReportDoublePage && <div className="book-spine" />}
+                          
+                          {/* Right Page */}
+                          {isReportDoublePage && (
+                            <div className={`flex-1 overflow-y-auto p-8 md:p-12 markdown-body serif-article ${reportFontSizeClass} book-page-shadow-right border-l border-outline-variant/10`}>
+                              {reportPages[reportDisplayIndex + 1] ? (
+                                <>
+                                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: MarkdownLink }}>{preprocessMarkdown(reportPages[reportDisplayIndex + 1])}</ReactMarkdown>
+                                  <div className="mt-8 text-xs opacity-50 text-center font-semibold select-none border-t border-outline-variant/10 pt-4">{reportDisplayIndex + 2} / {reportPages.length}</div>
+                                </>
+                              ) : (
+                                <div className="h-full flex flex-col items-center justify-center opacity-30 italic text-sm font-semibold select-none">
+                                  <BookOpen size={24} className="mb-2 opacity-50 text-primary" />마지막 페이지
+                                </div>
+                              )}
+                            </div>
+                          )}
+                          
+                          {/* Navigation Buttons */}
+                          <button onClick={handleReportPrev} disabled={reportDisplayIndex === 0} className="absolute left-4 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full flex items-center justify-center bg-black/10 hover:bg-black/25 disabled:opacity-0 disabled:pointer-events-none transition-all duration-300 z-20 text-on-background shadow-md border border-white/10" title="이전 페이지 (←)"><ChevronLeft size={20} /></button>
+                          <button onClick={handleReportNext} disabled={isReportDoublePage ? reportDisplayIndex + 2 >= reportPages.length : reportDisplayIndex + 1 >= reportPages.length} className="absolute right-4 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full flex items-center justify-center bg-black/10 hover:bg-black/25 disabled:opacity-0 disabled:pointer-events-none transition-all duration-300 z-20 text-on-background shadow-md border border-white/10" title="다음 페이지 (→)"><ChevronRight size={20} /></button>
+                        </div>
+                      ) : (
+                        <div className="markdown-body text-on-background bg-surface-container-lowest p-6 rounded-2xl border border-outline-variant/20 shadow-sm max-w-4xl mx-auto w-full overflow-y-auto">
+                          <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: MarkdownLink }}>
+                            {preprocessMarkdown(reportContent)}
+                          </ReactMarkdown>
+                        </div>
+                      )}
                     </div>
-                  </div>
-                ) : (
+                  );
+                })() : (
                   <div className="h-full flex flex-col items-center justify-center text-center">
                     <BookOpen size={48} className="text-outline/50 mb-4 animate-bounce" />
                     <h3 className="text-lg font-bold text-on-background">지식 위키 뷰어</h3>
@@ -1915,6 +2100,8 @@ function App() {
               </div>
             )}
 
+
+
             {/* Input Footer */}
             <form onSubmit={handleChatSubmit} className="p-3 bg-surface border-t border-outline-variant/30 flex items-end gap-2">
               <textarea 
@@ -1968,39 +2155,92 @@ function App() {
       </div>
 
       {/* Document Detail Popup Modal */}
-      {isPopupOpen && popupDoc && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-md transition-opacity">
-          <div className="bg-surface-container border border-outline-variant/50 rounded-2xl w-full max-w-3xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-            {/* Modal Header */}
-            <div className="p-5 border-b border-outline-variant/30 flex items-center justify-between bg-surface-container-high">
-              <div>
-                <div className="flex items-center gap-1.5 text-xs text-outline mb-1">
-                  <BookOpen size={12} />
-                  <span>{popupDoc.folder} (팝업 보기)</span>
+      {isPopupOpen && popupDoc && (() => {
+        const pages = parseMarkdownToPages(popupContent);
+        const isBooklet = bookletMode === 'booklet';
+        
+        const currentPageClamped = Math.max(0, Math.min(bookletCurrentPage, pages.length - 1));
+        const displayIndex = currentPageClamped;
+
+        const themeClass = bookletTheme === 'sepia'
+          ? 'theme-paper-sepia'
+          : bookletTheme === 'white'
+            ? 'theme-paper-white'
+            : 'theme-paper-dark';
+
+        const fontSizeClass = bookletFontSize === 'sm'
+          ? 'text-sm'
+          : bookletFontSize === 'lg'
+            ? 'text-lg'
+            : bookletFontSize === 'xl'
+              ? 'text-xl'
+              : 'text-base';
+
+        const handlePrev = () => {
+          setBookletCurrentPage(prev => Math.max(0, prev - 1));
+        };
+
+        const handleNext = () => {
+          setBookletCurrentPage(prev => Math.min(pages.length - 1, prev + 1));
+        };
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#191816]/75 backdrop-blur-md transition-opacity animate-in fade-in duration-200">
+            <div className={`bg-surface-container border border-outline-variant/30 rounded-2xl w-full flex flex-col shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 transition-all max-h-[85vh] h-[85vh] max-w-2xl`}>
+              {/* Modal Header */}
+              <div className="p-5 border-b border-outline-variant/30 flex items-center justify-between bg-surface-container-low shrink-0 select-none">
+                <div className="min-w-0 flex-1 pr-4">
+                  <div className="flex items-center gap-1.5 text-xs text-outline mb-1 font-semibold">
+                    <BookOpen size={12} className="text-primary" />
+                    <span>{popupDoc.folder} (팝업 1면 보기)</span>
+                  </div>
+                  <h3 className="text-base md:text-lg font-bold text-on-background truncate">{popupDoc.title}</h3>
                 </div>
-                <h3 className="text-lg font-bold text-on-background">{popupDoc.title}</h3>
+                <div className="flex items-center shrink-0">
+                  {isBooklet && (
+                    <div className="flex items-center gap-1.5 border-r border-outline-variant/30 pr-3 mr-3">
+                      <button onClick={() => setBookletTheme('sepia')} className={`w-5 h-5 rounded-full bg-[#f3ece0] border transition-all ${bookletTheme === 'sepia' ? 'ring-2 ring-primary border-white scale-110 shadow-sm' : 'border-outline-variant/40 hover:scale-105'}`} title="세피아 미색지" />
+                      <button onClick={() => setBookletTheme('white')} className={`w-5 h-5 rounded-full bg-[#faf9f6] border transition-all ${bookletTheme === 'white' ? 'ring-2 ring-primary border-slate-300 scale-110 shadow-sm' : 'border-outline-variant/40 hover:scale-105'}`} title="백색지" />
+                      <button onClick={() => setBookletTheme('dark')} className={`w-5 h-5 rounded-full bg-[#1e1b18] border transition-all ${bookletTheme === 'dark' ? 'ring-2 ring-primary border-slate-600 scale-110 shadow-sm' : 'border-outline-variant/40 hover:scale-105'}`} title="다크 매거진" />
+                    </div>
+                  )}
+                  {isBooklet && (
+                    <div className="flex items-center gap-1 border-r border-outline-variant/30 pr-3 mr-3">
+                      <button onClick={() => { if (bookletFontSize === 'xl') setBookletFontSize('lg'); else if (bookletFontSize === 'lg') setBookletFontSize('base'); else if (bookletFontSize === 'base') setBookletFontSize('sm'); }} disabled={bookletFontSize === 'sm'} className="w-6 h-6 flex items-center justify-center border border-outline-variant/50 rounded hover:bg-outline-variant/10 disabled:opacity-30 disabled:pointer-events-none text-xs font-bold text-on-background transition-colors" title="글자 크기 축소">A-</button>
+                      <span className="w-10 text-center text-[10px] text-outline font-bold uppercase select-none">{bookletFontSize}</span>
+                      <button onClick={() => { if (bookletFontSize === 'sm') setBookletFontSize('base'); else if (bookletFontSize === 'base') setBookletFontSize('lg'); else if (bookletFontSize === 'lg') setBookletFontSize('xl'); }} disabled={bookletFontSize === 'xl'} className="w-6 h-6 flex items-center justify-center border border-outline-variant/50 rounded hover:bg-outline-variant/10 disabled:opacity-30 disabled:pointer-events-none text-xs font-bold text-on-background transition-colors" title="글자 크기 확대">A+</button>
+                    </div>
+                  )}
+                  <button onClick={() => setBookletMode(bookletMode === 'booklet' ? 'scroll' : 'booklet')} className={`p-1.5 rounded-lg transition-colors border mr-3 ${bookletMode === 'booklet' ? 'bg-primary text-on-primary border-primary' : 'bg-transparent text-outline border-outline-variant/50 hover:bg-outline-variant/10 hover:text-on-background'}`} title={bookletMode === 'booklet' ? '종스크롤 아티클 모드로 변경' : '책자 넘김 매거진 모드로 변경'}>
+                    {bookletMode === 'booklet' ? <BookOpen size={16} /> : <FileText size={16} />}
+                  </button>
+                  <button onClick={() => { setIsPopupOpen(false); setPopupDoc(null); setPopupContent(''); }} className="p-1.5 hover:bg-outline-variant/20 rounded-full transition-colors text-outline hover:text-on-background">
+                    <X size={18} />
+                  </button>
+                </div>
               </div>
-              <button 
-                onClick={() => {
-                  setIsPopupOpen(false);
-                  setPopupDoc(null);
-                  setPopupContent('');
-                }}
-                className="p-1.5 hover:bg-outline-variant/20 rounded-full transition-colors text-outline hover:text-on-background"
-              >
-                <X size={18} />
-              </button>
-            </div>
-            
-            {/* Modal Content */}
-            <div className="flex-1 overflow-y-auto p-6 markdown-body text-on-background bg-surface-container-lowest">
-              <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: MarkdownLink }}>
-                {preprocessMarkdown(popupContent)}
-              </ReactMarkdown>
+              
+              {/* Modal Content */}
+              {isBooklet ? (
+                <div className={`flex-1 flex relative overflow-hidden ${themeClass}`}>
+                  <div className={`flex-1 overflow-y-auto p-8 md:p-12 markdown-body serif-article ${fontSizeClass} ${displayIndex === 0 ? 'first-page drop-cap' : ''} book-page-shadow-left`}>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: MarkdownLink }}>{preprocessMarkdown(pages[displayIndex])}</ReactMarkdown>
+                    <div className="mt-8 text-xs opacity-50 text-center font-semibold select-none border-t border-outline-variant/10 pt-4">{displayIndex + 1} / {pages.length}</div>
+                  </div>
+                  <button onClick={handlePrev} disabled={displayIndex === 0} className="absolute left-4 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full flex items-center justify-center bg-black/10 hover:bg-black/25 disabled:opacity-0 disabled:pointer-events-none transition-all duration-300 z-20 text-on-background shadow-md border border-white/10" title="이전 페이지 (←)"><ChevronLeft size={20} /></button>
+                  <button onClick={handleNext} disabled={displayIndex + 1 >= pages.length} className="absolute right-4 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full flex items-center justify-center bg-black/10 hover:bg-black/25 disabled:opacity-0 disabled:pointer-events-none transition-all duration-300 z-20 text-on-background shadow-md border border-white/10" title="다음 페이지 (→)"><ChevronRight size={20} /></button>
+                </div>
+              ) : (
+                <div className="flex-1 overflow-y-auto p-6 md:p-10 markdown-body text-on-background bg-surface-container-lowest">
+                  <div className="max-w-2xl mx-auto">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: MarkdownLink }}>{preprocessMarkdown(popupContent)}</ReactMarkdown>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Search Approval Modal */}
       {searchApprovalRequest && (
@@ -2080,26 +2320,30 @@ function Interactive3DGraph({ documents, onSelectNode, showDocumentPopup }) {
   // Cache to store node coordinates to prevent resetting positions on collapse/expand
   const nodePositionsRef = React.useRef({});
   const resizingRef = React.useRef(null);
+  const [isLoading, setIsLoading] = React.useState(true);
+  const [hoveredInfo, setHoveredInfo] = React.useState(null);
+  const fontScaleRef = React.useRef('normal');
+  const shouldResetPositionsRef = React.useRef(false);
 
   // Helper to resolve folder color
   const getFolderColor = (folderName) => {
     const FOLDER_COLORS = {
-      'knowledge/macro': '#38bdf8',
-      'knowledge/tech_themes': '#c084fc',
-      'knowledge/industries': '#34d399',
-      'knowledge/segments': '#2dd4bf',
-      'knowledge/institutions': '#fb923c',
-      'knowledge/people': '#f472b6',
-      'knowledge/drafts': '#a3a3a3',
-      'knowledge/USA': '#60a5fa',
-      'knowledge': '#3b82f6',
-      'guru report': '#a855f7',
-      'macro report': '#f59e0b',
-      'tech trend': '#06b6d4',
-      'startup report': '#ec4899',
-      'monthly_magazines': '#10b981',
-      'llmwiki chat': '#eab308',
-      'snp500 report': '#6366f1'
+      'knowledge/macro': '#7ca4ab',
+      'knowledge/tech_themes': '#aa91a8',
+      'knowledge/industries': '#8ea893',
+      'knowledge/segments': '#7ca39a',
+      'knowledge/institutions': '#d68b60',
+      'knowledge/people': '#d493a3',
+      'knowledge/drafts': '#b8b2a8',
+      'knowledge/USA': '#728aa0',
+      'knowledge': '#aa9885',
+      'guru report': '#947aa5',
+      'macro report': '#cca662',
+      'tech trend': '#6a9fa8',
+      'startup report': '#ca8094',
+      'monthly_magazines': '#72987a',
+      'llmwiki chat': '#d4aa3b',
+      'snp500 report': '#8082ba'
     };
     if (FOLDER_COLORS[folderName]) return FOLDER_COLORS[folderName];
     // Check key prefixes (e.g. knowledge/macro/subfolder)
@@ -2186,16 +2430,95 @@ function Interactive3DGraph({ documents, onSelectNode, showDocumentPopup }) {
     window.addEventListener('mouseup', handleMouseUp);
   };
 
-  // Group documents by folder for explorer tree
-  const foldersMap = React.useMemo(() => {
-    const map = {};
+  // Group documents hierarchically
+  const folderTree = React.useMemo(() => {
+    const root = { name: 'Root', path: '', children: {}, files: [] };
+    
     documents.forEach(doc => {
       const folder = doc.folder || 'other';
-      if (!map[folder]) map[folder] = [];
-      map[folder].push(doc);
+      const parts = folder.split('/');
+      let current = root;
+      
+      parts.forEach((part, index) => {
+        const currentPath = parts.slice(0, index + 1).join('/');
+        if (!current.children[part]) {
+          current.children[part] = {
+            name: part,
+            path: currentPath,
+            children: {},
+            files: []
+          };
+        }
+        current = current.children[part];
+      });
+      
+      current.files.push(doc);
     });
-    return map;
+    
+    return root;
   }, [documents]);
+
+  const renderFolderTreeNode = (node, depth = 0) => {
+    const subfolderKeys = Object.keys(node.children).sort();
+    const sortedFiles = [...node.files].sort((a, b) => a.title.localeCompare(b.title));
+    
+    return (
+      <div key={node.path || 'root'} className="space-y-1">
+        {subfolderKeys.map(key => {
+          const subNode = node.children[key];
+          const isOpen = expandedFolders.has(subNode.path);
+          const displayName = FOLDER_DISPLAY_NAMES[subNode.path] || subNode.name;
+          
+          const countAllFiles = (n) => {
+            let count = n.files.length;
+            Object.keys(n.children).forEach(k => {
+              count += countAllFiles(n.children[k]);
+            });
+            return count;
+          };
+          const totalFilesCount = countAllFiles(subNode);
+
+          return (
+            <div key={subNode.path} className="space-y-1">
+              <div 
+                onClick={() => toggleFolder(subNode.path)}
+                className="flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs cursor-pointer hover:bg-surface-container-high text-on-surface font-semibold transition-all"
+                style={{ paddingLeft: `${Math.max(10, depth * 12 + 10)}px` }}
+              >
+                <div className="flex items-center gap-1.5 truncate">
+                  <ChevronRight 
+                    size={12} 
+                    className={`transition-transform duration-200 text-outline shrink-0 ${isOpen ? 'rotate-90' : ''}`}
+                  />
+                  <span className="material-symbols-outlined text-[16px] text-amber-500 shrink-0">
+                    {isOpen ? 'folder_open' : 'folder'}
+                  </span>
+                  <span className="truncate">{displayName}</span>
+                </div>
+                <span className="text-[9px] text-outline font-mono bg-surface-container-highest px-1.5 py-0.5 rounded-full shrink-0">
+                  {totalFilesCount}
+                </span>
+              </div>
+              
+              {isOpen && renderFolderTreeNode(subNode, depth + 1)}
+            </div>
+          );
+        })}
+        
+        {sortedFiles.map(doc => (
+          <div 
+            key={doc.path}
+            onClick={() => showDocumentPopup(doc.title)}
+            className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] cursor-pointer hover:bg-surface-container-high text-on-surface-variant hover:text-primary transition-all truncate"
+            style={{ paddingLeft: `${Math.max(26, depth * 12 + 26)}px` }}
+          >
+            <FileText size={11} className="shrink-0 text-primary/70" />
+            <span className="truncate">{doc.title}</span>
+          </div>
+        ))}
+      </div>
+    );
+  };
 
   // Initialize and update nodes/links dynamically
   React.useEffect(() => {
@@ -2212,15 +2535,38 @@ function Interactive3DGraph({ documents, onSelectNode, showDocumentPopup }) {
       nodePositionsRef.current[n.id] = { x: n.x, y: n.y, z: n.z, vx: n.vx, vy: n.vy, vz: n.vz };
     });
 
-    // 2. Extract unique folders
-    const uniqueFolders = Array.from(new Set(documents.map(d => d.folder || 'other')));
+    // Helper to check if a folder path is visible based on parent expansion states
+    const isFolderVisible = (folderPath) => {
+      if (!folderPath || folderPath === 'other') return true;
+      const parts = folderPath.split('/');
+      if (parts.length === 1) return true; // root folders are always visible
+      const parentPath = parts.slice(0, -1).join('/');
+      return expandedFolders.has(parentPath) && isFolderVisible(parentPath);
+    };
 
-    // 3. Create folder nodes (always visible)
-    const folderNodes = uniqueFolders.map((folder, index) => {
-      const id = `folder-${folder}`;
+    // 2. Extract unique folder paths including all parent prefixes
+    const allFolderPathsSet = new Set();
+    documents.forEach(d => {
+      const folder = d.folder || 'other';
+      const parts = folder.split('/');
+      for (let i = 1; i <= parts.length; i++) {
+        allFolderPathsSet.add(parts.slice(0, i).join('/'));
+      }
+    });
+    const allFolderPaths = Array.from(allFolderPathsSet);
+
+    // Filter folder paths that are currently visible
+    const visibleFolderPaths = allFolderPaths.filter(p => isFolderVisible(p));
+
+    // 3. Create folder nodes
+    const folderNodes = visibleFolderPaths.map((folderPath, index) => {
+      const id = `folder-${folderPath}`;
       let x = 0, y = 0, z = 0;
       let vx = 0, vy = 0, vz = 0;
       
+      const parts = folderPath.split('/');
+      const parentPath = parts.length > 1 ? parts.slice(0, -1).join('/') : null;
+
       if (nodePositionsRef.current[id]) {
         x = nodePositionsRef.current[id].x;
         y = nodePositionsRef.current[id].y;
@@ -2229,29 +2575,43 @@ function Interactive3DGraph({ documents, onSelectNode, showDocumentPopup }) {
         vy = nodePositionsRef.current[id].vy;
         vz = nodePositionsRef.current[id].vz;
       } else {
-        const theta = (index / uniqueFolders.length) * 2 * Math.PI;
-        const r = 180;
-        x = r * Math.cos(theta);
-        y = r * Math.sin(theta);
-        z = (Math.random() - 0.5) * 80;
+        const parentId = parentPath ? `folder-${parentPath}` : null;
+        if (parentId && nodePositionsRef.current[parentId]) {
+          const px = nodePositionsRef.current[parentId].x;
+          const py = nodePositionsRef.current[parentId].y;
+          const pz = nodePositionsRef.current[parentId].z;
+          x = px + (Math.random() - 0.5) * 60;
+          y = py + (Math.random() - 0.5) * 60;
+          z = pz + (Math.random() - 0.5) * 60;
+        } else {
+          const theta = (index / visibleFolderPaths.length) * 2 * Math.PI;
+          const r = 180;
+          x = r * Math.cos(theta);
+          y = r * Math.sin(theta);
+          z = (Math.random() - 0.5) * 80;
+        }
       }
+      
+      const title = FOLDER_DISPLAY_NAMES[folderPath] || parts[parts.length - 1];
+      const immediateFiles = documents.filter(d => (d.folder || 'other') === folderPath);
       
       return {
         id,
-        title: folder,
+        title,
         isFolder: true,
-        folder: folder,
-        fileCount: foldersMap[folder]?.length || 0,
+        folder: folderPath,
+        parentFolder: parentPath,
+        fileCount: immediateFiles.length,
         x, y, z, vx, vy, vz,
         screenX: 0, screenY: 0, depth: 0, projectedScale: 1.0
       };
     });
 
-    // 4. Create active file nodes (only if folder is in expandedFolders)
+    // 4. Create active file nodes (only if folder is visible and expanded)
     const fileNodes = [];
     documents.forEach(doc => {
       const docFolder = doc.folder || 'other';
-      if (expandedFolders.has(docFolder)) {
+      if (isFolderVisible(docFolder) && expandedFolders.has(docFolder)) {
         const id = doc.path;
         let x = 0, y = 0, z = 0;
         let vx = 0, vy = 0, vz = 0;
@@ -2295,6 +2655,20 @@ function Interactive3DGraph({ documents, onSelectNode, showDocumentPopup }) {
     // 5. Create links
     const activeLinks = [];
     
+    // Link subfolders to their parent folders
+    folderNodes.forEach(fNode => {
+      if (fNode.parentFolder) {
+        const parentNode = folderNodes.find(p => p.folder === fNode.parentFolder);
+        if (parentNode) {
+          activeLinks.push({
+            source: parentNode,
+            target: fNode,
+            id: `link-subfolder-${fNode.parentFolder}-${fNode.folder}`
+          });
+        }
+      }
+    });
+    
     // Link files to parent folder nodes
     fileNodes.forEach(fileNode => {
       const parentFolderNode = folderNodes.find(f => f.folder === fileNode.folder);
@@ -2310,7 +2684,7 @@ function Interactive3DGraph({ documents, onSelectNode, showDocumentPopup }) {
     // Link file-to-file wiki links (only if both are active)
     documents.forEach(docA => {
       const docAFolder = docA.folder || 'other';
-      if (!expandedFolders.has(docAFolder)) return;
+      if (!isFolderVisible(docAFolder) || !expandedFolders.has(docAFolder)) return;
       
       const sourceNode = fileNodes.find(n => n.id === docA.path);
       if (!sourceNode) return;
@@ -2322,7 +2696,7 @@ function Interactive3DGraph({ documents, onSelectNode, showDocumentPopup }) {
         );
         if (targetDoc) {
           const targetDocFolder = targetDoc.folder || 'other';
-          if (!expandedFolders.has(targetDocFolder)) return;
+          if (!isFolderVisible(targetDocFolder) || !expandedFolders.has(targetDocFolder)) return;
           
           const targetNode = fileNodes.find(n => n.id === targetDoc.path);
           if (targetNode && sourceNode.id !== targetNode.id) {
@@ -2831,16 +3205,16 @@ function Interactive3DGraph({ documents, onSelectNode, showDocumentPopup }) {
         </div>
         <div className="space-y-1.5 text-[10px] text-on-surface-variant max-h-[280px] overflow-y-auto pr-1">
           {[
-            { label: '거시경제 (Macro)', color: '#38bdf8' },
-            { label: '기술테마 (Tech Themes)', color: '#c084fc' },
-            { label: '산업 (Industries)', color: '#34d399' },
-            { label: '세부 부문 (Segments)', color: '#2dd4bf' },
-            { label: '기관/기업 (Institutions)', color: '#fb923c' },
-            { label: '인물 (People)', color: '#f472b6' },
-            { label: '초안 (Drafts)', color: '#a3a3a3' },
-            { label: '미국 시장 (USA)', color: '#60a5fa' },
-            { label: '결정화 대화 (Chat)', color: '#eab308' },
-            { label: '기타 분석 보고서', color: '#6366f1' }
+            { label: '거시경제 (Macro)', color: '#7ca4ab' },
+            { label: '기술테마 (Tech Themes)', color: '#aa91a8' },
+            { label: '산업 (Industries)', color: '#8ea893' },
+            { label: '세부 부문 (Segments)', color: '#7ca39a' },
+            { label: '기관/기업 (Institutions)', color: '#d68b60' },
+            { label: '인물 (People)', color: '#d493a3' },
+            { label: '초안 (Drafts)', color: '#b8b2a8' },
+            { label: '미국 시장 (USA)', color: '#728aa0' },
+            { label: '결정화 대화 (Chat)', color: '#d4aa3b' },
+            { label: '기타 분석 보고서', color: '#8082ba' }
           ].map(item => (
             <div key={item.label} className="flex items-center gap-2">
               <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: item.color }} />
@@ -2890,49 +3264,8 @@ function Interactive3DGraph({ documents, onSelectNode, showDocumentPopup }) {
           </div>
 
           {/* Panel Body (Tree Structure) */}
-          <div className="flex-1 overflow-y-auto p-3 space-y-1.5 select-none">
-            {Object.keys(foldersMap).sort().map(folderName => {
-              const isOpen = expandedFolders.has(folderName);
-              const docsInFolder = foldersMap[folderName];
-              const displayName = FOLDER_DISPLAY_NAMES[folderName] || folderName;
-              return (
-                <div key={folderName} className="space-y-1">
-                  <div 
-                    onClick={() => toggleFolder(folderName)}
-                    className="flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs cursor-pointer hover:bg-surface-container-high text-on-surface font-semibold transition-all"
-                  >
-                    <div className="flex items-center gap-1.5 truncate">
-                      <ChevronRight 
-                        size={12} 
-                        className={`transition-transform duration-200 text-outline shrink-0 ${isOpen ? 'rotate-90' : ''}`}
-                      />
-                      <span className="material-symbols-outlined text-[16px] text-amber-500 shrink-0">
-                        {isOpen ? 'folder_open' : 'folder'}
-                      </span>
-                      <span className="truncate">{displayName}</span>
-                    </div>
-                    <span className="text-[9px] text-outline font-mono bg-surface-container-highest px-1.5 py-0.5 rounded-full shrink-0">
-                      {docsInFolder.length}
-                    </span>
-                  </div>
-                  
-                  {isOpen && (
-                    <div className="pl-3.5 border-l border-outline-variant/20 ml-4 space-y-0.5 py-0.5">
-                      {docsInFolder.map(doc => (
-                        <div 
-                          key={doc.path}
-                          onClick={() => showDocumentPopup(doc.title)}
-                          className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] cursor-pointer hover:bg-surface-container-high text-on-surface-variant hover:text-primary transition-all truncate"
-                        >
-                          <FileText size={11} className="shrink-0 text-primary/70" />
-                          <span className="truncate">{doc.title}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+          <div className="flex-1 overflow-y-auto p-3 space-y-1.5 select-none font-sans">
+            {renderFolderTreeNode(folderTree)}
           </div>
 
           {/* Resize Handle at Bottom-Right */}

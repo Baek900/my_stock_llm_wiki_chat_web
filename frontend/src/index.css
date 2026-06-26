@@ -6,59 +6,74 @@
   --font-scale: 1.0;
   --sans: "Inter", system-ui, -apple-system, sans-serif;
   --heading: "Inter", system-ui, -apple-system, sans-serif;
+  --serif: "Noto Serif KR", Georgia, serif;
   --mono: "JetBrains Mono", monospace;
 
-  --color-primary: #0040df;
-  --color-on-primary: #fff;
-  --color-primary-container: #2d5bff;
-  --color-on-primary-container: #efefff;
-  --color-secondary: #731be5;
-  --color-on-secondary: #fff;
-  --color-secondary-container: #8d42ff;
-  --color-on-secondary-container: #fdf6ff;
-  --color-tertiary: #8a3f00;
-  --color-on-tertiary: #fff;
-  --color-tertiary-container: #b05200;
-  --color-on-tertiary-container: #ffede4;
-  --color-background: #f8f9fb;
-  --color-on-background: #191c1e;
-  --color-surface: #f8f9fb;
-  --color-on-surface: #191c1e;
-  --color-on-surface-variant: #434656;
-  --color-surface-container-lowest: #fff;
-  --color-surface-container-low: #f3f4f6;
-  --color-surface-container: #edeef0;
-  --color-surface-container-high: #e7e8ea;
-  --color-surface-container-highest: #e1e2e4;
-  --color-outline: #747688;
-  --color-outline-variant: #c4c5d9;
+  /* Claude Light Palette */
+  --color-primary: #cc5a44;          /* Claude Terracotta */
+  --color-on-primary: #ffffff;
+  --color-primary-container: #f4eae6;/* Soft terracotta container */
+  --color-on-primary-container: #9e3b26;
+  
+  --color-secondary: #8c7b6e;        /* Warm Taupe */
+  --color-on-secondary: #ffffff;
+  --color-secondary-container: #f2ebe1;
+  --color-on-secondary-container: #5c4c41;
+  
+  --color-tertiary: #d9775f;         /* Coral accent */
+  --color-on-tertiary: #ffffff;
+  --color-tertiary-container: #fcf1ee;
+  --color-on-tertiary-container: #aa503b;
+  
+  --color-background: #fbfaf7;       /* Claude Warm Cream */
+  --color-on-background: #191919;    /* Deep Editorial Charcoal */
+  
+  --color-surface: #fbfaf7;
+  --color-on-surface: #191919;
+  --color-on-surface-variant: #6b6359;
+  
+  --color-surface-container-lowest: #ffffff;
+  --color-surface-container-low: #f6f4f0;
+  --color-surface-container: #ece6dc;/* Soft Linen */
+  --color-surface-container-high: #e3dbcf;
+  --color-surface-container-highest: #d9cfc0;
+  
+  --color-outline: #8c8273;
+  --color-outline-variant: #cfc5b4;
 }
 
 :root.dark {
-  --color-primary: #5c8aff;
-  --color-on-primary: #fff;
-  --color-primary-container: #153299;
-  --color-on-primary-container: #e0e6ff;
-  --color-secondary: #00c2ff;
-  --color-on-secondary: #003547;
-  --color-secondary-container: #004d66;
-  --color-on-secondary-container: #bfeeff;
-  --color-tertiary: #8e54ff;
-  --color-on-tertiary: #fff;
-  --color-tertiary-container: #4f1fb3;
-  --color-on-tertiary-container: #f0e8ff;
-  --color-background: #09090a;
-  --color-on-background: #e2e8f0;
-  --color-surface: #101012;
-  --color-on-surface: #e2e8f0;
-  --color-on-surface-variant: #94a3b8;
-  --color-surface-container-lowest: #060607;
-  --color-surface-container-low: #0c0c0e;
-  --color-surface-container: #141417;
-  --color-surface-container-high: #1c1c20;
-  --color-surface-container-highest: #242429;
-  --color-outline: #475569;
-  --color-outline-variant: #1e293b; /* Lower border contrast for dark mode */
+  /* Claude Dark Palette */
+  --color-primary: #e0826b;          /* Muted Terracotta */
+  --color-on-primary: #191816;
+  --color-primary-container: #4e2a22;
+  --color-on-primary-container: #f9d8d1;
+  
+  --color-secondary: #cfc5b4;        /* Warm Gray */
+  --color-on-secondary: #191816;
+  --color-secondary-container: #3e3831;
+  --color-on-secondary-container: #ece6dc;
+  
+  --color-tertiary: #d9775f;
+  --color-on-tertiary: #191816;
+  --color-tertiary-container: #4e2d27;
+  --color-on-tertiary-container: #f9d8d1;
+  
+  --color-background: #191816;       /* Deep Velvet Charcoal */
+  --color-on-background: #ece6dc;    /* Warm Linen text */
+  
+  --color-surface: #22201e;
+  --color-on-surface: #ece6dc;
+  --color-on-surface-variant: #b5ab9e;
+  
+  --color-surface-container-lowest: #121110;
+  --color-surface-container-low: #1e1c1a;
+  --color-surface-container: #2a2724;/* Warm Dark Bronze */
+  --color-surface-container-high: #36332f;
+  --color-surface-container-highest: #433f3a;
+  
+  --color-outline: #9e9384;
+  --color-outline-variant: #5c564d;
 }
 
 body {
@@ -292,4 +307,72 @@ header input {
 }
 .sidebar-text, nav button span {
   font-size: calc(14px * var(--font-scale, 1.0)) !important;
+}
+
+/* Booklet Specific Typography & Layout */
+.serif-article {
+  font-family: var(--serif);
+  line-height: 1.8;
+  font-size: 15.5px;
+}
+
+.serif-article p {
+  margin-bottom: 1.5em;
+  text-align: justify;
+}
+
+/* First-letter Drop Cap */
+.drop-cap p:first-of-type::first-letter, .drop-cap::first-letter {
+  font-size: 3.5em;
+  font-weight: 700;
+  float: left;
+  line-height: 0.85;
+  margin-right: 10px;
+  color: var(--color-primary);
+}
+
+/* Spine Shadow for Book View */
+.book-spine {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.05);
+  box-shadow: 0 0 12px 6px rgba(0, 0, 0, 0.08);
+  z-index: 10;
+  pointer-events: none;
+}
+.dark .book-spine {
+  background: rgba(0, 0, 0, 0.15);
+  box-shadow: 0 0 12px 6px rgba(0, 0, 0, 0.25);
+}
+
+.book-page-shadow-left {
+  box-shadow: inset -15px 0 20px -10px rgba(0, 0, 0, 0.04);
+}
+.dark .book-page-shadow-left {
+  box-shadow: inset -15px 0 20px -10px rgba(0, 0, 0, 0.2);
+}
+
+.book-page-shadow-right {
+  box-shadow: inset 15px 0 20px -10px rgba(0, 0, 0, 0.04);
+}
+.dark .book-page-shadow-right {
+  box-shadow: inset 15px 0 20px -10px rgba(0, 0, 0, 0.2);
+}
+
+/* Custom Paper Color Options for Booklet */
+.theme-paper-sepia {
+  background-color: #f3ece0 !important;
+  color: #433422 !important;
+}
+.theme-paper-white {
+  background-color: #faf9f6 !important;
+  color: #1a1a1a !important;
+}
+.theme-paper-dark {
+  background-color: #1e1b18 !important;
+  color: #e5dec9 !important;
 }

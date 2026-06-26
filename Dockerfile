@@ -11,7 +11,7 @@ FROM python:3.10-slim
 WORKDIR /app
 
 # Install dependencies
-RUN pip install --no-cache-dir fastapi uvicorn pydantic google-genai google-auth
+RUN pip install --no-cache-dir fastapi uvicorn pydantic google-genai google-auth chromadb sentence-transformers requests
 
 # Copy backend files
 COPY backend /app/backend
