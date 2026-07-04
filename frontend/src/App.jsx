@@ -4,7 +4,8 @@ import remarkGfm from 'remark-gfm';
 import { 
   Search, BookOpen, MessageSquare, ShieldAlert, Cpu, 
   ChevronRight, ChevronLeft, RefreshCw, Sun, Moon, ArrowRight, Check, X,
-  FileText, Globe, Lightbulb, Network, ZoomIn, ZoomOut, Maximize2, Minimize2, Eye, Type, RotateCw
+  FileText, Globe, Lightbulb, Network, ZoomIn, ZoomOut, Maximize2, Minimize2, Eye, Type, RotateCw,
+  Plus, Trash, Menu
 } from 'lucide-react';
 import './App.css';
 import OnboardingGuide from './components/OnboardingGuide';
@@ -129,7 +130,7 @@ function App() {
       ...options,
       headers,
     });
-    if (res.status === 401 || res.status === 403) {
+    if (res.status === 401) {
       if (!url.includes('/api/auth/')) {
         localStorage.removeItem('session_token');
         setIsAuthenticated(false);
@@ -174,13 +175,13 @@ function App() {
     }
   };
 
-  const [activeTab, setActiveTab] = useState('landing'); // 'landing' | 'explorer' | 'graph'
+  const [activeTab, setActiveTab] = useState(() => localStorage.getItem('activeSessionId') ? 'explorer' : 'landing'); // 'landing' | 'explorer' | 'graph'
   const [documents, setDocuments] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedDoc, setSelectedDoc] = useState(null);
   const [docContent, setDocContent] = useState('');
   const [currentReportResponse, setCurrentReportResponse] = useState('');
-  const [modelMode, setModelMode] = useState('normal'); // 'normal' | 'turbo'
+  const [modelMode, setModelMode] = useState('default'); // 'default' | 'normal' | 'turbo'
   const [searchApprovalQueries, setSearchApprovalQueries] = useState(null);
   const [lastUserMessage, setLastUserMessage] = useState('');
   const [activeDraftPath, setActiveDraftPath] = useState(null);
@@ -196,6 +197,36 @@ function App() {
   const [popupDoc, setPopupDoc] = useState(null);
   const [popupContent, setPopupContent] = useState('');
   const [isPopupOpen, setIsPopupOpen] = useState(false);
+  const [isResearchActive, setIsResearchActive] = useState(() => {
+    return localStorage.getItem('activeSessionId') ? true : false;
+  });
+  
+  // --- Research Sessions & Floating Chat States (Antigravity 2.0) ---
+  const [sessions, setSessions] = useState([]);
+  const [activeSessionId, setActiveSessionId] = useState(() => {
+    return localStorage.getItem('activeSessionId') || null;
+  });
+  const [isSessionListOpen, setIsSessionListOpen] = useState(() => {
+    return localStorage.getItem('activeSessionId') ? true : false;
+  });
+  const [floatingChatHistory, setFloatingChatHistory] = useState(() => {
+    try {
+      const saved = localStorage.getItem('floatingChatHistory');
+      return saved ? JSON.parse(saved) : [{
+        role: 'assistant',
+        content: '안녕하세요! 저는 Agent-Guru 플로팅 Lite 비서입니다. 지식 검색 RAG 답변을 제공해 드립니다. ("프롬프트 다듬어줘"라고 하시면 입력하신 내용을 바탕으로 최적의 리서치 지침을 작성해 드려요!)',
+        thoughts: []
+      }];
+    } catch (e) {
+      return [];
+    }
+  });
+  const [floatingChatInput, setFloatingChatInput] = useState('');
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [isFloatingGenerating, setIsFloatingGenerating] = useState(false);
+  const [floatingThoughts, setFloatingThoughts] = useState([]);
+  const [floatingResponse, setFloatingResponse] = useState('');
+  const [planApprovalRequest, setPlanApprovalRequest] = useState(null);
 
   // Booklet states
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
@@ -468,8 +499,17 @@ function App() {
   // 2. Helper Functions (that can reference the hooks/states above safely)
   const preprocessMarkdown = (text) => {
     if (!text) return '';
+    // Normalize newlines to \n to prevent GFM table parser failure on Windows \r\n line endings
+    let processed = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+    // Fix common LLM syntax error where double backticks (``) are written instead of triple backticks (```) for code blocks
+    processed = processed.replace(/^\s*``\s*$/gm, '```');
+
+    // Fix range strike-through error where LLM outputs double tildes (~~) between numbers instead of a range tilde (~)
+    processed = processed.replace(/(\d+(?:\.\d+)?%?)\s*~~\s*(\d+(?:\.\d+)?%?)/g, '$1~$2');
+
     // Process [[wiki]] links to #/wiki/target
-    let processed = text.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (match, p1, p2) => {
+    processed = processed.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (match, p1, p2) => {
       const target = p1.trim();
       const label = p2 ? p2.trim() : target;
       return `[${label}](#/wiki/${encodeURIComponent(target)})`;
@@ -497,17 +537,41 @@ function App() {
       }
     }
 
-    // Try splitting by horizontal rule lines
+    // Split by horizontal rules first if present
     const hrRegex = /^\s*---\s*$/m;
+    let initialBlocks = [];
     if (hrRegex.test(cleaned)) {
-      const pages = cleaned.split(hrRegex).map(p => p.trim()).filter(Boolean);
-      if (pages.length > 0) return pages;
+      initialBlocks = cleaned.split(hrRegex).map(p => p.trim()).filter(Boolean);
+    } else {
+      initialBlocks = [cleaned];
     }
 
-    // Fallback: split by main headings (h2 '##')
-    const h2Regex = /(?=^##\s+)/m;
-    const pages = cleaned.split(h2Regex).map(p => p.trim()).filter(Boolean);
+    const pages = [];
+    const headingRegex = /(?=^#{1,3}\s+)/m; // Matches #, ##, or ### at the start of a line
     
+    initialBlocks.forEach(block => {
+      const subparts = block.split(headingRegex).map(p => p.trim()).filter(Boolean);
+      
+      let currentPage = '';
+      subparts.forEach(part => {
+        // Smart merge: only split at a heading if current page has >= 800 chars,
+        // or if combined text exceeds 2500 chars to avoid oversized pages.
+        if (currentPage && (currentPage.length >= 800 || currentPage.length + part.length > 2500)) {
+          pages.push(currentPage);
+          currentPage = part;
+        } else {
+          if (currentPage) {
+            currentPage += '\n\n' + part;
+          } else {
+            currentPage = part;
+          }
+        }
+      });
+      if (currentPage) {
+        pages.push(currentPage);
+      }
+    });
+
     if (pages.length === 0) return [''];
     return pages;
   };
@@ -583,15 +647,19 @@ function App() {
     if (foundDoc) {
       try {
         const res = await fetchWithAuth(`/api/documents/detail?path=${encodeURIComponent(foundDoc.path)}`);
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.detail || `HTTP ${res.status}`);
+        }
         const data = await res.json();
         setPopupDoc(foundDoc);
-        setPopupContent(data.content);
+        setPopupContent(data.content || '본문 내용이 비어있습니다.');
         setBookletCurrentPage(0); // Reset page index
         setIsPopupOpen(true);
         console.log("Successfully opened popup for doc:", foundDoc.title);
       } catch (e) {
         console.error('Failed to fetch doc content for popup:', e);
-        alert('문서 내용을 가져오는 데 실패했습니다.');
+        alert(`문서 내용을 가져오는 데 실패했습니다. (${e.message})`);
       }
     } else {
       console.log("Document NOT found, showing alert");
@@ -644,6 +712,169 @@ function App() {
     return <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline" {...props}>{children}</a>;
   };
 
+  const Mermaid = ({ chart }) => {
+    const [svg, setSvg] = useState('');
+    const [error, setError] = useState(null);
+    const [loaded, setLoaded] = useState(false);
+    const idRef = useRef(`mermaid-${Math.floor(Math.random() * 1000000)}`);
+
+    useEffect(() => {
+      const scriptId = 'mermaid-cdn-script';
+      let script = document.getElementById(scriptId);
+      
+      const initializeMermaid = () => {
+        try {
+          window.mermaid.initialize({
+            startOnLoad: false,
+            theme: 'neutral',
+            securityLevel: 'loose',
+            fontFamily: 'inherit',
+          });
+          setLoaded(true);
+        } catch (err) {
+          console.error("Failed to initialize mermaid:", err);
+          setError("그래프 초기화 실패");
+        }
+      };
+
+      if (window.mermaid) {
+        initializeMermaid();
+      } else {
+        if (!script) {
+          script = document.createElement('script');
+          script.id = scriptId;
+          script.src = 'https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js';
+          script.async = true;
+          document.body.appendChild(script);
+        }
+
+        const handleScriptLoad = () => {
+          initializeMermaid();
+        };
+
+        script.addEventListener('load', handleScriptLoad);
+        return () => {
+          script.removeEventListener('load', handleScriptLoad);
+        };
+      }
+    }, []);
+
+    useEffect(() => {
+      if (!loaded || !chart) return;
+
+      let isMounted = true;
+      
+      // Sanitize chart code to support link syntax and avoid parser crashes
+      let cleanChart = String(chart).trim();
+      try {
+        const links = [];
+        const bracketTypes = [
+          { open: '\\[', close: '\\]', styleOpen: '[', styleClose: ']' },
+          { open: '\\(', close: '\\)', styleOpen: '(', styleClose: ')' },
+          { open: '\\{', close: '\\}', styleOpen: '{', styleClose: '}' },
+        ];
+        
+        for (const b of bracketTypes) {
+          const regex = new RegExp(`([a-zA-Z0-9_-]+)${b.open}([^${b.close}]+)${b.close}\\(([^\\)]+)\\)`, 'g');
+          cleanChart = cleanChart.replace(regex, (match, nodeId, label, url) => {
+            const cleanLabel = label.replace(/"/g, '\\"');
+            links.push(`click ${nodeId} href "${url}"`);
+            return `${nodeId}${b.styleOpen}"${cleanLabel}"${b.styleClose}`;
+          });
+        }
+        
+        if (links.length > 0) {
+          cleanChart += '\n' + links.join('\n');
+        }
+      } catch (e) {
+        console.error("Failed to sanitize mermaid chart:", e);
+      }
+
+      window.mermaid.render(idRef.current, cleanChart)
+        .then(({ svg: renderedSvg }) => {
+          if (isMounted) {
+            setSvg(renderedSvg);
+            setError(null);
+          }
+        })
+        .catch((err) => {
+          console.error("Mermaid rendering error:", err);
+          if (isMounted) {
+            setError("그래프를 그리는 도중 오류가 발생했습니다.");
+          }
+          try {
+            const badDiv = document.getElementById(idRef.current);
+            if (badDiv) badDiv.remove();
+            const badDivBind = document.getElementById(`d${idRef.current}`);
+            if (badDivBind) badDivBind.remove();
+          } catch (e) {}
+        });
+
+      return () => {
+        isMounted = false;
+      };
+    }, [loaded, chart]);
+
+    if (error) {
+      return (
+        <div className="p-4 my-3 bg-rose-500/10 border border-rose-500/30 rounded-xl font-mono text-xs text-rose-500">
+          <div className="font-bold mb-1">⚠️ {error}</div>
+          <pre className="overflow-x-auto whitespace-pre-wrap mt-2 opacity-80">{chart}</pre>
+        </div>
+      );
+    }
+
+    if (!loaded || !svg) {
+      return (
+        <div className="p-8 my-3 bg-surface-container-low border border-outline-variant/30 rounded-xl flex flex-col items-center justify-center gap-2 select-none">
+          <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
+          <span className="text-[10px] text-outline font-semibold">그래프 렌더링 중...</span>
+        </div>
+      );
+    }
+
+    return (
+      <div 
+        className="p-4 my-4 bg-white border border-outline-variant/20 rounded-xl flex justify-center overflow-x-auto shadow-sm"
+        dangerouslySetInnerHTML={{ __html: svg }} 
+      />
+    );
+  };
+
+  const MarkdownComponents = {
+    a: MarkdownLink,
+    code({ node, className, children, ...props }) {
+      const match = /language-(\w+)/.exec(className || '');
+      const codeStr = String(children || '').trim();
+      const isMermaid = (match && match[1] === 'mermaid') || 
+                        codeStr.startsWith('graph ') || 
+                        codeStr.startsWith('graph\n') ||
+                        codeStr.startsWith('graph\r\n') ||
+                        codeStr.startsWith('flowchart ') || 
+                        codeStr.startsWith('flowchart\n') ||
+                        codeStr.startsWith('flowchart\r\n') ||
+                        codeStr.startsWith('sequenceDiagram') || 
+                        codeStr.startsWith('gantt') || 
+                        codeStr.startsWith('classDiagram') || 
+                        codeStr.startsWith('stateDiagram');
+      
+      if (isMermaid) {
+        return <Mermaid chart={codeStr} />;
+      }
+      return match ? (
+        <pre className="p-4 my-3 bg-surface-container-low border border-outline-variant/30 rounded-xl overflow-x-auto font-mono text-sm leading-relaxed text-on-surface-variant select-text">
+          <code className={className} {...props}>
+            {children}
+          </code>
+        </pre>
+      ) : (
+        <code className="px-1.5 py-0.5 rounded bg-outline-variant/20 text-on-surface font-mono text-[0.9em]" {...props}>
+          {children}
+        </code>
+      );
+    }
+  };
+
   const buildTree = (docs) => {
     const root = { name: 'Root', isFolder: true, children: {} };
     
@@ -680,8 +911,11 @@ function App() {
     const initAuth = async () => {
       try {
         const configRes = await fetch('/api/auth/config');
+        if (!configRes.ok) {
+          throw new Error(`Auth config returned status ${configRes.status}`);
+        }
         const configData = await configRes.json();
-        const authEnabled = configData.is_auth_enabled;
+        const authEnabled = !!configData.is_auth_enabled;
         setIsAuthEnabled(authEnabled);
 
         if (!authEnabled) {
@@ -704,16 +938,21 @@ function App() {
               return;
             } else {
               localStorage.removeItem('session_token');
+              setIsAuthenticated(false);
             }
           } catch (e) {
             console.error("Stored token verification failed:", e);
             localStorage.removeItem('session_token');
+            setIsAuthenticated(false);
           }
+        } else {
+          setIsAuthenticated(false);
         }
 
         setIsAuthLoading(false);
       } catch (err) {
         console.error("Failed to initialize auth:", err);
+        setIsAuthenticated(false);
         setIsAuthLoading(false);
       }
     };
@@ -726,10 +965,48 @@ function App() {
     if (isAuthenticated) {
       fetchDocuments();
       checkResourceStatus();
+      fetchSessions();
       const interval = setInterval(checkResourceStatus, 15000);
       return () => clearInterval(interval);
     }
   }, [isAuthenticated]);
+
+  // Sync floating chat history to localStorage
+  useEffect(() => {
+    localStorage.setItem('floatingChatHistory', JSON.stringify(floatingChatHistory));
+  }, [floatingChatHistory]);
+
+  // Load session messages when active session ID changes and sync to localStorage
+  useEffect(() => {
+    if (activeSessionId) {
+      loadSessionMessages(activeSessionId);
+      localStorage.setItem('activeSessionId', activeSessionId);
+    } else {
+      localStorage.removeItem('activeSessionId');
+    }
+  }, [activeSessionId]);
+
+  // Auto-restore draft document and active stream subscription when sessions list or active session changes
+  useEffect(() => {
+    if (activeSessionId && sessions.length > 0) {
+      const activeSess = sessions.find(s => s.id === activeSessionId);
+      if (activeSess) {
+        if (activeSess.active_draft_path && (!selectedDoc || selectedDoc.path !== activeSess.active_draft_path)) {
+          selectDocument({
+            path: activeSess.active_draft_path,
+            title: activeSess.title + " (초안)",
+            folder: 'knowledge/drafts',
+            category: 'Deep Research',
+            size: 0
+          });
+        }
+        // Also if it is generating and we are not currently generating (e.g. on page refresh), reconnect!
+        if (activeSess.generating && !isGenerating) {
+          reconnectActiveStream(activeSessionId);
+        }
+      }
+    }
+  }, [sessions, activeSessionId, isGenerating]);
 
   useEffect(() => {
     if (darkMode) {
@@ -857,11 +1134,34 @@ function App() {
 
   const fetchDocuments = async (query = '') => {
     try {
-      const res = await fetchWithAuth(`/api/documents?query=${encodeURIComponent(query)}`);
+      const res = await fetchWithAuth(`/api/documents?query=${encodeURIComponent(query)}&fast=true`);
       const data = await res.json();
       setDocuments(data);
     } catch (e) {
       console.error('Failed to fetch documents:', e);
+    }
+  };
+
+  const handleRefreshDocuments = async () => {
+    if (isSyncing) return;
+    setIsSyncing(true);
+    try {
+      const res = await fetchWithAuth('/api/documents/refresh', {
+        method: 'POST'
+      });
+      if (res.ok) {
+        const data = await res.json();
+        alert(data.message || '성공적으로 GCP 버킷과 동기화되었습니다.');
+        await fetchDocuments(searchQuery);
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || `HTTP ${res.status}`);
+      }
+    } catch (e) {
+      console.error('Failed to sync with GCP bucket:', e);
+      alert(`GCP 동기화 실패: ${e.message}`);
+    } finally {
+      setIsSyncing(false);
     }
   };
 
@@ -911,6 +1211,31 @@ function App() {
       });
       // Clear active draft path
       setActiveDraftPath(null);
+      
+      // Reset research session
+      setIsResearchActive(false);
+      setIsSidebarOpen(true);
+      
+      if (activeSessionId) {
+        try {
+          await fetchWithAuth(`/api/research/sessions/${activeSessionId}`, {
+            method: 'DELETE'
+          });
+          await fetchSessions();
+          setActiveSessionId(null);
+        } catch (sessErr) {
+          console.error("Failed to delete session on publish:", sessErr);
+        }
+      }
+      
+      // Reset chat history
+      setChatHistory([
+        {
+          role: 'assistant',
+          content: '보고서 발행이 완료되었습니다! 새로운 대화나 리서치를 시작하실 수 있습니다.',
+          thoughts: []
+        }
+      ]);
     } catch (e) {
       console.error(e);
       setPublishedPaths(prev => {
@@ -934,11 +1259,15 @@ function App() {
     setActiveTab('explorer');
     try {
       const res = await fetchWithAuth(`/api/documents/detail?path=${encodeURIComponent(doc.path)}`);
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || `HTTP ${res.status}`);
+      }
       const data = await res.json();
-      setDocContent(data.content);
+      setDocContent(data.content || '본문 내용이 비어있습니다.');
     } catch (e) {
       console.error('Failed to load document content:', e);
-      setDocContent('문서를 읽어오는 데 실패했습니다.');
+      setDocContent(`문서를 읽어오는 데 실패했습니다. (${e.message})`);
     }
   };
 
@@ -951,6 +1280,122 @@ function App() {
     setCurrentResponse(prev => prev + '\n\n⚠️ 사용자에 의해 분석이 중단되었습니다.');
     setCurrentThoughts([]);
     setCurrentReportResponse('');
+  };
+
+  const fetchSessions = async () => {
+    try {
+      const res = await fetchWithAuth('/api/research/sessions');
+      if (res.ok) {
+        const data = await res.json();
+        setSessions(data);
+      }
+    } catch (err) {
+      console.error("Failed to load sessions:", err);
+    }
+  };
+
+  const loadSessionMessages = async (sessId) => {
+    try {
+      const res = await fetchWithAuth(`/api/research/sessions/${sessId}/messages`);
+      if (res.ok) {
+        const data = await res.json();
+        const history = data.map(msg => ({
+          role: msg.role,
+          content: msg.content,
+          thoughts: msg.thoughts ? JSON.parse(msg.thoughts) : []
+        }));
+        setChatHistory(history.length > 0 ? history : [{
+          role: 'assistant',
+          content: '새 리서치 세션이 시작되었습니다. 원하시는 리서치 주제나 분석 대상을 입력해 주세요.',
+          thoughts: []
+        }]);
+      }
+    } catch (err) {
+      console.error("Failed to load session messages:", err);
+    }
+  };
+
+  const handleCreateSession = async (title = '새 리서치 세션', mode = 'normal', autoStartQuery = null) => {
+    try {
+      const res = await fetchWithAuth('/api/research/sessions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ title, model_mode: mode })
+      });
+      if (res.ok) {
+        const newSess = await res.json();
+        await fetchSessions();
+        setActiveSessionId(newSess.id);
+        setModelMode(newSess.model_mode);
+        setCurrentReportResponse('');
+        setIsSidebarOpen(false);
+        setIsResearchActive(true);
+        setActiveTab('explorer');
+
+        if (autoStartQuery) {
+          setChatHistory([{
+            role: 'assistant',
+            content: `새 리서치 세션이 시작되었습니다. 주제: "${autoStartQuery}"`,
+            thoughts: []
+          }]);
+          setTimeout(() => {
+            handleChatSubmit(null, autoStartQuery, newSess.id);
+          }, 150);
+        } else {
+          setChatHistory([{
+            role: 'assistant',
+            content: '새 리서치 세션이 시작되었습니다. 원하시는 리서치 주제나 분석 대상을 입력해 주세요.',
+            thoughts: []
+          }]);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to create session:", err);
+    }
+  };
+
+  const handleDeleteSession = async (sessId, e) => {
+    if (e) e.stopPropagation();
+    if (!confirm("정말 이 세션을 삭제하시겠습니까? 관련 대화 기록이 모두 소실됩니다.")) return;
+    try {
+      const res = await fetchWithAuth(`/api/research/sessions/${sessId}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        await fetchSessions();
+        if (activeSessionId === sessId) {
+          setActiveSessionId(null);
+          setChatHistory([{
+            role: 'assistant',
+            content: '리서치를 개시하려면 왼쪽 세션 목록에서 세션을 선택하거나 [새 세션]을 생성해 주세요.',
+            thoughts: []
+          }]);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to delete session:", err);
+    }
+  };
+
+  const handleClearFloatingChat = () => {
+    if (confirm("대화 기록을 초기화하시겠습니까?")) {
+      setFloatingChatHistory([{
+        role: 'assistant',
+        content: '안녕하세요! 저는 Agent-Guru 플로팅 Lite 비서입니다. 지식 검색 RAG 답변을 제공해 드립니다. ("프롬프트 다듬어줘"라고 하시면 입력하신 내용을 바탕으로 최적의 리서치 지침을 작성해 드려요!)',
+        thoughts: []
+      }]);
+      setFloatingResponse('');
+      setFloatingThoughts([]);
+    }
+  };
+
+  const handleAddSessionClick = () => {
+    const title = prompt("새로운 리서치 주제를 입력해 주세요:", "새 리서치 주제");
+    if (title && title.trim()) {
+      handleCreateSession(title.trim(), 'normal', title.trim());
+    }
   };
 
   const handleNewChat = async () => {
@@ -979,6 +1424,19 @@ function App() {
     }
   };
 
+  const handleNewResearchClick = async () => {
+    handleStopGeneration();
+    const title = prompt("새로운 리서치 주제를 입력해 주세요:", "새 리서치 주제");
+    if (title && title.trim()) {
+      await handleCreateSession(title.trim(), 'normal', title.trim());
+    }
+  };
+
+  const handleExitResearch = () => {
+    setIsResearchActive(false);
+    setIsSidebarOpen(true);
+  };
+
   const handleSearchApproval = async (approved) => {
     if (!searchApprovalRequest) return;
     try {
@@ -997,12 +1455,97 @@ function App() {
     }
   };
 
-  const handleChatSubmit = async (e) => {
+  const handleFloatingChatSubmit = async (e) => {
     e.preventDefault();
-    if (!chatInput.trim() || isGenerating) return;
+    if (!floatingChatInput.trim() || isFloatingGenerating) return;
 
-    const userMessage = chatInput.trim();
-    setChatInput('');
+    const userMessage = floatingChatInput.trim();
+    setFloatingChatInput('');
+    setFloatingChatHistory(prev => [...prev, { role: 'user', content: userMessage }]);
+    setIsFloatingGenerating(true);
+    setFloatingThoughts([]);
+    setFloatingResponse('');
+
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    try {
+      const response = await fetchWithAuth('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({ 
+          query: userMessage, 
+          model_mode: 'default',
+          chat_type: 'floating',
+          chat_history: floatingChatHistory
+            .map(h => ({ role: h.role, content: h.content }))
+        })
+      });
+
+      if (!response.body) throw new Error('No response body');
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let done = false;
+      let buffer = '';
+      let accumulatedResponse = '';
+
+      while (!done) {
+        const { value, done: readerDone } = await reader.read();
+        done = readerDone;
+        buffer += decoder.decode(value, { stream: !done });
+
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.trim()) {
+            try {
+              const event = jsonParseSSE(line);
+              if (event.type === 'thought') {
+                setFloatingThoughts(prev => [...prev, event.text]);
+              } else if (event.type === 'content') {
+                accumulatedResponse += event.text;
+                setFloatingResponse(accumulatedResponse);
+              }
+            } catch (err) {
+              console.error('Failed to parse floating event line:', line, err);
+            }
+          }
+        }
+      }
+
+      setFloatingChatHistory(prev => [...prev, {
+        role: 'assistant',
+        content: accumulatedResponse || '답변을 완성하지 못했습니다.',
+        thoughts: []
+      }]);
+      setFloatingResponse('');
+      setFloatingThoughts([]);
+      setIsFloatingGenerating(false);
+    } catch (err) {
+      console.error('Floating SSE Error:', err);
+      setFloatingChatHistory(prev => [...prev, {
+        role: 'assistant',
+        content: `⚠️ 에러가 발생했습니다: ${err.message}`,
+        thoughts: []
+      }]);
+      setIsFloatingGenerating(false);
+    }
+  };
+
+  const handleChatSubmit = async (e, overrideQuery = null, overrideSessionId = null) => {
+    if (e && e.preventDefault) e.preventDefault();
+    const userMessage = overrideQuery ? overrideQuery.trim() : chatInput.trim();
+    if (!userMessage || isGenerating) return;
+
+    if (!overrideQuery) {
+      setChatInput('');
+    }
     setChatHistory(prev => [...prev, { role: 'user', content: userMessage }]);
     setIsGenerating(true);
     setCurrentThoughts([]);
@@ -1010,9 +1553,6 @@ function App() {
     setCurrentReportResponse('');
     setSelectedDoc(null);
     setMetaImprovement(null);
-
-    // Open chat window if minimized
-    setIsChatOpen(true);
 
     try {
       const statusRes = await fetchWithAuth('/api/status');
@@ -1038,6 +1578,38 @@ function App() {
     abortControllerRef.current = controller;
 
     try {
+      let currentSessId = overrideSessionId || activeSessionId;
+      if (isResearchActive && !currentSessId) {
+        // Auto-create session on message submit
+        const title = userMessage.length > 20 ? userMessage.substring(0, 20) + "..." : userMessage;
+        try {
+          const res = await fetchWithAuth('/api/research/sessions', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ title, model_mode: modelMode })
+          });
+          if (res.ok) {
+            const newSess = await res.json();
+            currentSessId = newSess.id;
+            setActiveSessionId(newSess.id);
+            await fetchSessions();
+          } else {
+            throw new Error("세션 생성 실패");
+          }
+        } catch (err) {
+          console.error("Failed to auto-create session:", err);
+          setChatHistory(prev => [...prev, {
+            role: 'assistant',
+            content: '⚠️ 리서치 세션을 생성하지 못했습니다. 왼쪽 세션 목록에서 [새 세션]을 만들어 주세요.',
+            thoughts: []
+          }]);
+          setIsGenerating(false);
+          return;
+        }
+      }
+
       const response = await fetchWithAuth('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1049,7 +1621,9 @@ function App() {
           is_modification_mode: isModificationMode,
           chat_history: chatHistory
             .filter(h => h.type !== 'search_status')
-            .map(h => ({ role: h.role, content: h.content }))
+            .map(h => ({ role: h.role, content: h.content })),
+          session_id: isResearchActive ? currentSessId : null,
+          chat_type: 'research'
         })
       });
 
@@ -1110,6 +1684,21 @@ function App() {
                 setLastUserMessage(userMessage);
                 isWaitingForSearchApproval = true;
                 done = true;
+              } else if (event.type === 'plan_approval_required') {
+                setPlanApprovalRequest({ 
+                  planId: event.plan_id, 
+                  planSteps: event.plan_steps, 
+                  query: event.query 
+                });
+                isWaitingForSearchApproval = true; // behaves similarly to halt stream
+                done = true;
+              } else if (event.type === 'verification_completed') {
+                // Yield verification checklist as an assistant event bubble
+                setChatHistory(prev => [...prev, {
+                  role: 'assistant',
+                  content: event.verification_details,
+                  thoughts: []
+                }]);
               }
             } catch (e) {
               console.error('Failed to parse event line:', line, e);
@@ -1132,8 +1721,9 @@ function App() {
         setIsGenerating(false);
       }
       
-      // Reload document list
+      // Reload document list and sessions list
       fetchDocuments(searchQuery);
+      fetchSessions();
     } catch (e) {
       console.error('SSE Error:', e);
       setChatHistory(prev => [...prev, {
@@ -1142,6 +1732,106 @@ function App() {
         thoughts: []
       }]);
       setIsGenerating(false);
+    }
+  };
+
+  const reconnectActiveStream = async (sessId) => {
+    if (isGenerating) return;
+    
+    setIsGenerating(true);
+    setCurrentThoughts([]);
+    setCurrentResponse('');
+    setCurrentReportResponse('');
+    setMetaImprovement(null);
+
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    try {
+      const response = await fetchWithAuth('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({ 
+          query: '(Reconnecting...)',
+          model_mode: modelMode, 
+          draft_path: activeDraftPath,
+          chat_history: [],
+          session_id: sessId,
+          chat_type: 'research'
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let done = false;
+      let accumulatedResponse = '';
+      let accumulatedReport = '';
+      let accumulatedThoughts = [];
+
+      while (!done) {
+        const { value, done: doneReading } = await reader.read();
+        done = doneReading;
+        const chunkValue = decoder.decode(value);
+        const lines = chunkValue.split('\n');
+        
+        for (const line of lines) {
+          if (line.trim().startsWith('data: ')) {
+            try {
+              const event = jsonParseSSE(line);
+              if (event.type === 'reasoning') {
+                accumulatedThoughts.push(event.text);
+                setCurrentThoughts([...accumulatedThoughts]);
+              } else if (event.type === 'report_chunk') {
+                accumulatedReport += event.text;
+                setCurrentReportResponse(accumulatedReport);
+              } else if (event.type === 'report_path') {
+                setCurrentReportResponse('');
+                accumulatedReport = '';
+                setActiveDraftPath(event.path);
+                selectDocument({
+                  title: event.title,
+                  path: event.path,
+                  folder: 'knowledge/drafts',
+                  category: 'Deep Research',
+                  size: 0
+                });
+              } else if (event.type === 'content') {
+                accumulatedResponse += event.text;
+                setCurrentResponse(accumulatedResponse);
+              } else if (event.type === 'meta_improve') {
+                setMetaImprovement(event.instruction);
+              } else if (event.type === 'verification_completed') {
+                setChatHistory(prev => [...prev, {
+                  role: 'assistant',
+                  content: event.verification_details,
+                  thoughts: []
+                }]);
+              }
+            } catch (e) {
+              console.error('Failed to parse event line:', line, e);
+            }
+          }
+        }
+      }
+
+      await loadSessionMessages(sessId);
+      setIsGenerating(false);
+      fetchSessions();
+      fetchDocuments(searchQuery);
+
+    } catch (e) {
+      if (e.name !== 'AbortError') {
+        console.error('Re-connect Error:', e);
+        setIsGenerating(false);
+      }
     }
   };
 
@@ -1184,23 +1874,394 @@ function App() {
     return true;
   });
 
-  const inputFontClass = chatSize.width > 700 
-    ? 'text-base py-3 px-4.5 max-h-40' 
-    : chatSize.width > 500 
-      ? 'text-sm py-2.5 px-4 max-h-32' 
-      : 'text-xs py-2 px-3.5 max-h-24';
-  const buttonSizeClass = chatSize.width > 700
-    ? 'w-12 h-12 rounded-2xl'
-    : chatSize.width > 500
-      ? 'w-10 h-10 rounded-xl'
-      : 'w-8 h-8 rounded-xl';
-  const messageFontClass = chatSize.width > 700
-    ? 'text-base p-5'
-    : chatSize.width > 500
-      ? 'text-sm p-4'
-      : 'text-[13px] p-3.5';
+  const getChatFontClasses = (width) => {
+    const inputFont = width > 700 
+      ? 'text-base py-3 px-4.5 max-h-40' 
+      : width > 500 
+        ? 'text-sm py-2.5 px-4 max-h-32' 
+        : 'text-xs py-2 px-3.5 max-h-24';
+    const buttonSize = width > 700
+      ? 'w-12 h-12 rounded-2xl'
+      : width > 500
+        ? 'w-10 h-10 rounded-xl'
+        : 'w-8 h-8 rounded-xl';
+    const messageFont = width > 700
+      ? 'text-base p-5'
+      : width > 500
+        ? 'text-sm p-4'
+        : 'text-[13px] p-3.5';
+    return { inputFont, buttonSize, messageFont };
+  };
 
-  if (isAuthLoading) {
+  const renderChatPanelContent = (isDocked = false) => {
+    // Determine active values based on docked state (research vs floating Q&A)
+    const history = isDocked ? chatHistory : floatingChatHistory;
+    const isGen = isDocked ? isGenerating : isFloatingGenerating;
+    const thoughts = isDocked ? currentThoughts : floatingThoughts;
+    const response = isDocked ? currentResponse : floatingResponse;
+    const input = isDocked ? chatInput : floatingChatInput;
+    const setInput = isDocked ? setChatInput : setFloatingChatInput;
+    const handleSubmit = isDocked ? handleChatSubmit : handleFloatingChatSubmit;
+    const handleStop = isDocked ? handleStopGeneration : () => {
+      if (abortControllerRef.current) abortControllerRef.current.abort();
+      setIsFloatingGenerating(false);
+    };
+
+    const width = isDocked ? (isSessionListOpen ? 420 : 400) : chatSize.width;
+    const { inputFont: inputFontClass, buttonSize: buttonSizeClass, messageFont: messageFontClass } = getChatFontClasses(width);
+
+    return (
+      <div className={`w-full h-full flex overflow-hidden relative ${isDocked ? 'bg-surface-container' : 'glass border border-primary/30 rounded-2xl shadow-2xl flex-col'}`}>
+        
+        {/* Left Side: Sessions Sidebar (Only in Docked mode and when list is toggled open) */}
+        {isDocked && isSessionListOpen && (
+          <div className="w-[200px] border-r border-outline-variant/30 flex flex-col bg-surface-container-low shrink-0 h-full overflow-hidden">
+            {/* Sidebar Header */}
+            <div className="p-3 border-b border-outline-variant/20 flex items-center justify-between shrink-0 bg-surface-container-high">
+              <span className="font-bold text-xs text-on-surface">리서치 세션 목록</span>
+              <button 
+                onClick={handleAddSessionClick}
+                className="p-1 rounded-md text-primary hover:bg-primary/10 transition-colors"
+                title="새 세션 생성"
+              >
+                <Plus size={16} />
+              </button>
+            </div>
+            {/* Session List */}
+            <div className="flex-1 overflow-y-auto p-2 space-y-1">
+              {sessions.length === 0 ? (
+                <div className="text-center py-6 text-[11px] text-outline">생성된 세션이 없습니다.</div>
+              ) : (
+                sessions.map(sess => (
+                  <div 
+                    key={sess.id}
+                    onClick={() => {
+                      setActiveSessionId(sess.id);
+                      setModelMode(sess.model_mode);
+                      
+                      // Restore session active draft if it exists
+                      if (sess.active_draft_path) {
+                        selectDocument({ 
+                          path: sess.active_draft_path, 
+                          title: sess.title + " (초안)",
+                          folder: 'knowledge/drafts',
+                          category: 'Deep Research',
+                          size: 0
+                        });
+                      } else {
+                        setSelectedDoc(null);
+                        setDocContent('');
+                        setActiveDraftPath(null);
+                      }
+                      
+                      // Reconnect to active stream if generating
+                      if (sess.generating) {
+                        reconnectActiveStream(sess.id);
+                      }
+                    }}
+                    className={`group p-2 rounded-lg cursor-pointer flex items-center justify-between text-xs transition-all ${
+                      activeSessionId === sess.id
+                        ? 'bg-primary/10 border-l-4 border-primary text-primary font-bold'
+                        : 'hover:bg-surface-container-high text-on-surface-variant'
+                    }`}
+                  >
+                    <div className="flex flex-col min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className="truncate text-[11px]">{sess.title}</span>
+                        {sess.generating && (
+                          <RefreshCw className="animate-spin text-primary flex-shrink-0" size={10} />
+                        )}
+                      </div>
+                      <span className={`text-[9px] w-max px-1 py-0.2 rounded mt-0.5 font-bold ${
+                        sess.model_mode === 'turbo' 
+                          ? 'bg-purple-500/10 text-purple-500' 
+                          : 'bg-blue-500/10 text-blue-500'
+                      }`}>
+                        {sess.model_mode === 'turbo' ? 'PRO' : 'NORMAL'}
+                      </span>
+                    </div>
+                    <button 
+                      onClick={(e) => handleDeleteSession(sess.id, e)}
+                      className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-error hover:bg-error/10 transition-all ml-1 shrink-0"
+                      title="세션 삭제"
+                    >
+                      <Trash size={12} />
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Right Side: Chat Panel Container */}
+        <div className="flex-1 flex flex-col h-full overflow-hidden">
+          {/* Header */}
+          <div 
+            onMouseDown={isDocked ? undefined : handleMouseDown}
+            className={`p-4 bg-primary text-on-primary flex items-center justify-between select-none ${isDocked ? '' : 'cursor-move'}`}
+          >
+            <div className="flex items-center gap-2">
+              {isDocked && (
+                <button
+                  onClick={() => setIsSessionListOpen(!isSessionListOpen)}
+                  className={`p-1 rounded hover:bg-white/10 transition-colors mr-1 ${isSessionListOpen ? 'bg-white/20' : ''}`}
+                  title="세션 목록 토글"
+                >
+                  <Menu size={16} />
+                </button>
+              )}
+              <MessageSquare className="w-5 h-5 animate-bounce" />
+              <span className="font-bold text-[14px]">
+                {isDocked ? 'Agent-Guru (리서치 세션)' : 'Agent-Guru AI'}
+              </span>
+            </div>
+            <div className="flex items-center gap-3">
+              {isGen && (
+                <div className="flex items-center bg-white/10 px-2 py-0.5 rounded text-[9px] font-bold animate-pulse">
+                  ⚡ ACTIVE
+                </div>
+              )}
+              {isDocked ? (
+                <>
+                  <button 
+                    onClick={handleAddSessionClick}
+                    className="opacity-75 hover:opacity-100 p-1 rounded-lg hover:bg-white/10 text-[10px] flex items-center gap-1 font-bold transition-all"
+                    title="새 리서치 시작"
+                  >
+                    <Plus size={12} />
+                    <span>새 세션</span>
+                  </button>
+                  <button 
+                    onClick={handleExitResearch}
+                    className="opacity-70 hover:opacity-100 p-1 rounded-lg hover:bg-white/10 text-[10px] flex items-center gap-1 font-bold transition-all"
+                    title="리서치 세션 종료"
+                  >
+                    <X size={12} />
+                    <span>종료</span>
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button 
+                    onClick={handleClearFloatingChat}
+                    className="opacity-75 hover:opacity-100 p-1 rounded-lg hover:bg-white/10 text-[10px] flex items-center gap-1 font-bold transition-all"
+                    title="대화 초기화"
+                  >
+                    <RefreshCw size={12} />
+                    <span>초기화</span>
+                  </button>
+                  <button 
+                    onClick={() => setIsChatOpen(false)}
+                    className="opacity-70 hover:opacity-100 p-0.5 rounded-full hover:bg-white/10"
+                  >
+                    <X size={16} />
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Model Mode & Modification Mode Toggle Bar (Only for Docked mode) */}
+          {isDocked && (
+            <div className="px-4 py-2 bg-surface-container border-b border-outline-variant/30 flex flex-col gap-2 text-[11px] shrink-0">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-on-surface-variant flex items-center gap-1">
+                  <Cpu size={14} className="text-primary" />
+                  대화 모드:
+                </span>
+                <div className="flex bg-surface-container-high rounded-full p-0.5 border border-outline-variant/20">
+                  <button
+                    type="button"
+                    onClick={() => setModelMode('normal')}
+                    className={`px-3 py-0.5 rounded-full text-[9px] font-extrabold transition-all duration-200 ${
+                      modelMode !== 'turbo'
+                        ? 'bg-primary text-on-primary shadow-sm'
+                        : 'text-on-surface-variant/70 hover:bg-surface-container-highest'
+                    }`}
+                    title="일반 리서치 모드 (Gemini 3.5 Flash)"
+                  >
+                    일반 (3.5 Flash)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setModelMode('turbo')}
+                    className={`px-3 py-0.5 rounded-full text-[9px] font-extrabold transition-all duration-200 ${
+                      modelMode === 'turbo'
+                        ? 'bg-primary text-on-primary shadow-sm'
+                        : 'text-on-surface-variant/70 hover:bg-surface-container-highest'
+                    }`}
+                    title="심층 띵킹 리서치 모드 (Gemini 3.1 Pro)"
+                  >
+                    심층 띵킹 (3.1 Pro)
+                  </button>
+                </div>
+              </div>
+              
+              <div className="flex items-center justify-between border-t border-outline-variant/10 pt-1.5">
+                <span className="font-bold text-on-surface-variant flex items-center gap-1">
+                  <span className="material-symbols-outlined text-[16px] text-amber-500">edit_note</span>
+                  보고서 수정 모드:
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setIsModificationMode(!isModificationMode)}
+                  className={`px-3 py-0.5 rounded-full text-[9px] font-extrabold uppercase transition-all duration-200 ${
+                    isModificationMode 
+                      ? 'bg-amber-600 text-white shadow-sm' 
+                      : 'bg-surface-container-high text-on-surface-variant hover:bg-surface-container-highest'
+                  }`}
+                  title="발행 전 드래프트 보고서의 수정/보완을 활성화합니다."
+                >
+                  {isModificationMode ? 'ON (수정)' : 'OFF (신규)'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Message Area */}
+          <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-surface-container-lowest/50">
+            {history.map((msg, idx) => {
+              if (msg.type === 'search_status') {
+                return (
+                  <div key={idx} className="flex justify-center my-2 animate-fade-in">
+                    <div className="flex items-center gap-1.5 px-3 py-1 bg-amber-500/10 border border-amber-500/20 rounded-full text-[11px] font-medium text-amber-600 dark:text-amber-400">
+                      <span className="material-symbols-outlined text-[13px]">find_in_page</span>
+                      <span>{msg.content}</span>
+                    </div>
+                  </div>
+                );
+              }
+
+              return (
+                <div key={idx} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
+                  <span className="text-[10px] text-outline font-bold mb-1">{msg.role === 'user' ? '사용자' : 'Agent-Guru'}</span>
+                  
+                  {/* Thoughts Timeline */}
+                  {msg.thoughts && msg.thoughts.length > 0 && (
+                    <details className="w-full max-w-[90%] bg-surface-container border border-outline-variant/30 rounded-xl p-2.5 mb-2 text-xs">
+                      <summary className="cursor-pointer text-[11px] font-bold text-primary hover:underline select-none">
+                        RAG 및 다단계 추론 스캔 ({msg.thoughts.length}단계 완료)
+                      </summary>
+                      <ul className="mt-2 space-y-1.5 border-l-2 border-primary/20 pl-3">
+                        {msg.thoughts.map((t, tIdx) => (
+                          <li key={tIdx} className="text-on-surface-variant leading-relaxed text-[11px]">
+                            {t}
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
+
+                  <div className={`max-w-[90%] rounded-2xl leading-relaxed ${messageFontClass} ${
+                    msg.role === 'user' 
+                      ? 'bg-primary text-on-primary rounded-tr-none' 
+                      : 'bg-surface-container border border-outline-variant/30 text-on-background rounded-tl-none markdown-body'
+                  }`}>
+                    {msg.role === 'user' ? (
+                      msg.content
+                    ) : (
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={MarkdownComponents}>
+                        {preprocessMarkdown(msg.content)}
+                      </ReactMarkdown>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+
+            {/* Streaming Content */}
+            {isGen && (
+              <div className="flex flex-col items-start">
+                <span className="text-[10px] text-outline font-bold mb-1">Agent-Guru</span>
+                
+                {/* Live Thought Stream */}
+                {thoughts.length > 0 && (
+                  <div className="w-full max-w-[90%] bg-surface-container border border-outline-variant/30 rounded-xl p-2.5 mb-2 text-xs">
+                    <div className="flex items-center gap-1.5 text-[11px] font-bold text-primary mb-1">
+                      <RefreshCw className="animate-spin" size={12} />
+                      <span>생각하는 중...</span>
+                    </div>
+                    <ul className="space-y-1.5 border-l-2 border-primary/20 pl-3">
+                      {thoughts.map((t, tIdx) => (
+                        <li key={tIdx} className={`text-on-surface-variant text-[11px] ${tIdx === thoughts.length - 1 ? 'font-bold text-primary animate-pulse' : ''}`}>
+                          {t}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {response && (
+                  <div className={`max-w-[90%] rounded-2xl leading-relaxed bg-surface-container border border-outline-variant/30 text-on-background rounded-tl-none markdown-body ${messageFontClass}`}>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={MarkdownComponents}>
+                      {preprocessMarkdown(response)}
+                    </ReactMarkdown>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div ref={chatEndRef} />
+          </div>
+
+          {/* Meta Improvement Panel (Only for Docked) */}
+          {isDocked && metaImprovement && (
+            <div className="p-4 bg-surface-container border-t border-outline-variant/40 text-xs">
+              <div className="flex items-center gap-1.5 font-bold text-primary mb-1">
+                <Lightbulb size={14} className="text-amber-500" />
+                <span>행동 가이드라인 학습 제안</span>
+              </div>
+              <p className="text-[11px] text-on-surface-variant mb-2">질문에서 감지된 아래 가이드라인을 학습하여 대화 규칙에 반영할까요?</p>
+              <div className="p-2 bg-surface-container-high rounded border border-outline-variant/20 italic mb-3">"{metaImprovement}"</div>
+              <div className="flex gap-2">
+                <button onClick={acceptImprovement} className="flex-1 py-1.5 bg-primary text-on-primary rounded font-bold hover:opacity-90">반영 승인</button>
+                <button onClick={() => setMetaImprovement(null)} className="flex-1 py-1.5 bg-surface-container-highest text-on-surface rounded font-bold hover:bg-surface-container-high">무시</button>
+              </div>
+            </div>
+          )}
+
+          {/* Input Footer */}
+          <form onSubmit={handleSubmit} className="p-3 bg-surface border-t border-outline-variant/30 flex items-end gap-2">
+            <textarea 
+              placeholder={resourceStatus.busy ? "예약작업 중으로 대화가 제한됩니다." : (isDocked && searchApprovalRequest) ? "웹 검색 승인이 진행 중입니다..." : "질문 입력..."}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              disabled={isGen || resourceStatus.busy || (isDocked && !!searchApprovalRequest)}
+              rows={1}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSubmit(e);
+                }
+              }}
+              className={`flex-1 bg-surface-container-low border border-outline-variant/30 rounded-xl focus:outline-none focus:ring-1 focus:ring-primary resize-none overflow-y-auto ${inputFontClass}`}
+            />
+            {isGen ? (
+              <button 
+                type="button" 
+                onClick={handleStop}
+                className={`bg-red-600 hover:bg-red-700 text-white flex items-center justify-center transition-all shrink-0 animate-pulse ${buttonSizeClass}`}
+                title="분석 중단"
+              >
+                <X size={16} />
+              </button>
+            ) : (
+              <button 
+                type="submit" 
+                disabled={!input.trim() || resourceStatus.busy || (isDocked && !!searchApprovalRequest)}
+                className={`bg-primary text-on-primary flex items-center justify-center hover:opacity-90 disabled:opacity-50 transition-all shrink-0 ${buttonSizeClass}`}
+              >
+                <ArrowRight size={16} />
+              </button>
+            )}
+          </form>
+        </div>
+      </div>
+    );
+  };
+
+    if (isAuthLoading) {
     return (
       <div className="flex h-screen w-screen flex-col items-center justify-center bg-slate-950 text-primary dark">
         <div className="flex flex-col items-center gap-4">
@@ -1296,7 +2357,10 @@ function App() {
         {/* Tab Links */}
         <nav className="flex-1 px-4 space-y-1 overflow-y-auto">
           <button 
-            onClick={() => setActiveTab('landing')}
+            onClick={() => {
+              setActiveTab('landing');
+              setIsResearchActive(false);
+            }}
             className={`w-full flex items-center px-4 py-3 rounded-xl transition-all ${
               activeTab === 'landing' 
                 ? 'text-primary border-r-4 border-primary bg-surface-container-low font-bold scale-[0.98]' 
@@ -1309,7 +2373,10 @@ function App() {
 
           <button 
             id="sidebar-explorer"
-            onClick={() => setActiveTab('explorer')}
+            onClick={() => {
+              setActiveTab('explorer');
+              setIsResearchActive(false);
+            }}
             className={`w-full flex items-center px-4 py-3 rounded-xl transition-all ${
               activeTab === 'explorer' 
                 ? 'text-primary border-r-4 border-primary bg-surface-container-low font-bold scale-[0.98]' 
@@ -1322,7 +2389,10 @@ function App() {
           
           <button 
             id="sidebar-graph"
-            onClick={() => setActiveTab('graph')}
+            onClick={() => {
+              setActiveTab('graph');
+              setIsResearchActive(false);
+            }}
             className={`w-full flex items-center px-4 py-3 rounded-xl transition-all ${
               activeTab === 'graph' 
                 ? 'text-primary border-r-4 border-primary bg-surface-container-low font-bold scale-[0.98]' 
@@ -1331,6 +2401,41 @@ function App() {
           >
             <span className="material-symbols-outlined mr-3">account_tree</span>
             <span className="text-[14px]">Knowledge Graph</span>
+          </button>
+          <button 
+            id="sidebar-research"
+            onClick={() => {
+              setActiveTab('explorer');
+              setIsResearchActive(true);
+              setIsSessionListOpen(true);
+              
+              // Restore active draft for the current session if it exists
+              if (activeSessionId) {
+                const activeSess = sessions.find(s => s.id === activeSessionId);
+                if (activeSess) {
+                  if (activeSess.active_draft_path) {
+                    selectDocument({ 
+                      path: activeSess.active_draft_path, 
+                      title: activeSess.title + " (초안)",
+                      folder: 'knowledge/drafts',
+                      category: 'Deep Research',
+                      size: 0
+                    });
+                  }
+                  if (activeSess.generating) {
+                    reconnectActiveStream(activeSessionId);
+                  }
+                }
+              }
+            }}
+            className={`w-full flex items-center px-4 py-3 rounded-xl transition-all ${
+              activeTab === 'explorer' && isResearchActive
+                ? 'text-primary border-r-4 border-primary bg-surface-container-low font-bold scale-[0.98]' 
+                : 'text-on-surface-variant hover:bg-surface-container-low'
+            }`}
+          >
+            <span className="material-symbols-outlined mr-3">science</span>
+            <span className="text-[14px]">AI Research</span>
           </button>
         </nav>
 
@@ -1406,6 +2511,20 @@ function App() {
                 className="w-full bg-surface-container-low border border-outline-variant/40 rounded-full py-1.5 pl-10 pr-4 text-xs focus:outline-none focus:ring-2 focus:ring-primary/20"
               />
             </div>
+            
+            <button
+              onClick={handleRefreshDocuments}
+              disabled={isSyncing}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold transition-all shadow-sm shrink-0 ${
+                isSyncing 
+                  ? 'bg-surface-container-highest border-outline text-outline scale-[0.98]' 
+                  : 'bg-primary/10 border-primary/20 text-primary hover:bg-primary/20'
+              }`}
+              title="GCP 클라우드 스토리지 버킷 파일 동기화 및 갱신"
+            >
+              <RefreshCw size={12} className={isSyncing ? "animate-spin" : ""} />
+              <span>{isSyncing ? '동기화 중...' : 'GCP 동기화'}</span>
+            </button>
           </div>
 
           <div className="flex items-center gap-3">
@@ -1598,74 +2717,86 @@ function App() {
           {activeTab === 'explorer' && (
             <div className="flex-1 flex h-full overflow-hidden">
               
-              {/* Left Pane: Document List */}
-              <section className={`w-[350px] h-full border-r border-outline-variant/30 bg-surface/40 flex flex-col overflow-hidden transition-all duration-300 ${
-                isFocusMode ? 'w-0 border-r-0 overflow-hidden opacity-0' : ''
-              }`}>
-                {/* Filter Chips */}
-                <div className="p-4 border-b border-outline-variant/20">
-                  <div className="flex flex-wrap gap-1">
-                    {['all', 'knowledge', 'snp500', 'macro', 'trend'].map(filter => (
-                      <button
-                        key={filter}
-                        onClick={() => setActiveFilter(filter)}
-                        className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase transition-all ${
-                          activeFilter === filter 
-                            ? 'bg-primary text-on-primary' 
-                            : 'bg-surface-container-high text-on-surface-variant hover:bg-surface-container-highest'
-                        }`}
-                      >
-                        {filter === 'all' ? '전체' :
-                         filter === 'knowledge' ? '지식' :
-                         filter === 'snp500' ? 'S&P 500' :
-                         filter === 'macro' ? '매크로' : '트렌드'}
-                      </button>
-                    ))}
-                  </div>
+              {/* Left Pane: Document List or Active Research Chat */}
+              {isResearchActive ? (
+                <div className={`h-full border-r border-outline-variant/30 bg-surface flex flex-col overflow-hidden transition-all duration-300 shrink-0 ${
+                  isFocusMode 
+                    ? 'w-0 border-r-0 overflow-hidden opacity-0' 
+                    : isSessionListOpen 
+                      ? 'w-[580px] xl:w-[620px]' 
+                      : 'w-[380px] xl:w-[420px]'
+                }`}>
+                  {renderChatPanelContent(true)}
                 </div>
-
-                {/* List Container */}
-                <div className="flex-1 overflow-y-auto p-4 space-y-2">
-                  {filteredDocuments.length === 0 ? (
-                    <div className="text-center py-8 text-xs text-outline">일치하는 문서가 없습니다.</div>
-                  ) : searchQuery.trim() === '' ? (
-                    <div className="space-y-1">
-                      {Object.keys(buildTree(filteredDocuments).children).map(key => (
-                        <TreeNode 
-                          key={key} 
-                          node={buildTree(filteredDocuments).children[key]} 
-                          onSelect={selectDocument} 
-                          selectedPath={selectedDoc?.path} 
-                        />
+              ) : (
+                <section className={`w-[350px] h-full border-r border-outline-variant/30 bg-surface/40 flex flex-col overflow-hidden transition-all duration-300 ${
+                  isFocusMode ? 'w-0 border-r-0 overflow-hidden opacity-0' : ''
+                }`}>
+                  {/* Filter Chips */}
+                  <div className="p-4 border-b border-outline-variant/20">
+                    <div className="flex flex-wrap gap-1">
+                      {['all', 'knowledge', 'snp500', 'macro', 'trend'].map(filter => (
+                        <button
+                          key={filter}
+                          onClick={() => setActiveFilter(filter)}
+                          className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase transition-all ${
+                            activeFilter === filter 
+                              ? 'bg-primary text-on-primary' 
+                              : 'bg-surface-container-high text-on-surface-variant hover:bg-surface-container-highest'
+                          }`}
+                        >
+                          {filter === 'all' ? '전체' :
+                           filter === 'knowledge' ? '지식' :
+                           filter === 'snp500' ? 'S&P 500' :
+                           filter === 'macro' ? '매크로' : '트렌드'}
+                        </button>
                       ))}
                     </div>
-                  ) : (
-                    filteredDocuments.map((doc, idx) => (
-                      <div 
-                        key={idx}
-                        onClick={() => selectDocument(doc)}
-                        className={`p-3.5 rounded-xl border transition-all cursor-pointer group ${
-                          selectedDoc?.path === doc.path 
-                            ? 'bg-surface border-primary shadow-sm' 
-                            : 'bg-surface-container-lowest border-outline-variant/30 hover:border-primary/50'
-                        }`}
-                      >
-                        <div className="flex justify-between items-start mb-1.5">
-                          <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider ${
-                            (doc.folder && doc.folder.startsWith('knowledge')) ? 'bg-primary-container text-on-primary-container' :
-                            doc.folder === 'snp500 report' ? 'bg-secondary-container text-on-secondary-container' : 'bg-tertiary-container text-on-tertiary-container'
-                          }`}>
-                            {getFolderTagLabel(doc.folder)}
-                          </span>
-                          <span className="text-[9px] text-outline font-mono">{(doc.size / 1024).toFixed(1)} KB</span>
-                        </div>
-                        <h3 className="text-[13px] font-bold group-hover:text-primary transition-colors line-clamp-1">{doc.title}</h3>
-                        {doc.category && <p className="text-[10px] text-on-surface-variant mt-1">{doc.category}</p>}
+                  </div>
+
+                  {/* List Container */}
+                  <div className="flex-1 overflow-y-auto p-4 space-y-2">
+                    {filteredDocuments.length === 0 ? (
+                      <div className="text-center py-8 text-xs text-outline">일치하는 문서가 없습니다.</div>
+                    ) : searchQuery.trim() === '' ? (
+                      <div className="space-y-1">
+                        {Object.keys(buildTree(filteredDocuments).children).map(key => (
+                          <TreeNode 
+                            key={key} 
+                            node={buildTree(filteredDocuments).children[key]} 
+                            onSelect={selectDocument} 
+                            selectedPath={selectedDoc?.path} 
+                          />
+                        ))}
                       </div>
-                    ))
-                  )}
-                </div>
-              </section>
+                    ) : (
+                      filteredDocuments.map((doc, idx) => (
+                        <div 
+                          key={idx}
+                          onClick={() => selectDocument(doc)}
+                          className={`p-3.5 rounded-xl border transition-all cursor-pointer group ${
+                            selectedDoc?.path === doc.path 
+                              ? 'bg-surface border-primary shadow-sm' 
+                              : 'bg-surface-container-lowest border-outline-variant/30 hover:border-primary/50'
+                          }`}
+                        >
+                          <div className="flex justify-between items-start mb-1.5">
+                            <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider ${
+                              (doc.folder && doc.folder.startsWith('knowledge')) ? 'bg-primary-container text-on-primary-container' :
+                              doc.folder === 'snp500 report' ? 'bg-secondary-container text-on-secondary-container' : 'bg-tertiary-container text-on-tertiary-container'
+                            }`}>
+                              {getFolderTagLabel(doc.folder)}
+                            </span>
+                            <span className="text-[9px] text-outline font-mono">{(doc.size / 1024).toFixed(1)} KB</span>
+                          </div>
+                          <h3 className="text-[13px] font-bold group-hover:text-primary transition-colors line-clamp-1">{doc.title}</h3>
+                          {doc.category && <p className="text-[10px] text-on-surface-variant mt-1">{doc.category}</p>}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </section>
+              )}
 
               {/* Right Pane: Document Details */}
               <main className="flex-1 h-full overflow-y-auto bg-surface-container-lowest p-8 transition-all duration-300">
@@ -1716,7 +2847,7 @@ function App() {
                   };
 
                   return (
-                    <div className="max-w-7xl mx-auto w-full flex flex-col animate-in fade-in duration-300">
+                    <div className="max-w-[95vw] mx-auto w-full flex flex-col animate-in fade-in duration-300">
                       {/* Document Details Header */}
                       <div className="mb-4 pb-4 border-b border-outline-variant/30 flex flex-col md:flex-row md:items-center justify-between gap-3 shrink-0">
                         <div>
@@ -1787,10 +2918,16 @@ function App() {
 
                       {/* Booklet or Scroll Content */}
                       {isReportBooklet ? (
-                        <div className={`flex-1 flex relative overflow-hidden rounded-2xl border border-outline-variant/30 shadow-md min-h-[550px] h-[65vh] ${reportThemeClass}`}>
+                        <div className={`flex-1 flex relative overflow-hidden rounded-2xl border border-outline-variant/30 shadow-md min-h-[600px] h-[78vh] ${reportThemeClass}`}>
                           {/* Left Page */}
-                          <div className={`flex-1 overflow-y-auto p-8 md:p-12 markdown-body serif-article ${reportFontSizeClass} ${reportDisplayIndex === 0 ? 'first-page drop-cap' : ''} book-page-shadow-left`}>
-                            <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: MarkdownLink }}>{preprocessMarkdown(reportPages[reportDisplayIndex])}</ReactMarkdown>
+                          <div className={`flex-1 overflow-y-auto p-8 md:p-12 markdown-body serif-article ${reportFontSizeClass} ${reportDisplayIndex === 0 && reportPages[reportDisplayIndex] ? 'first-page drop-cap' : ''} book-page-shadow-left`}>
+                            {reportPages[reportDisplayIndex] ? (
+                              <ReactMarkdown remarkPlugins={[remarkGfm]} components={MarkdownComponents}>{preprocessMarkdown(reportPages[reportDisplayIndex])}</ReactMarkdown>
+                            ) : (
+                              <div className="flex h-full items-center justify-center">
+                                <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
+                              </div>
+                            )}
                             <div className="mt-8 text-xs opacity-50 text-center font-semibold select-none border-t border-outline-variant/10 pt-4">{reportDisplayIndex + 1} / {reportPages.length}</div>
                           </div>
                           
@@ -1801,7 +2938,7 @@ function App() {
                             <div className={`flex-1 overflow-y-auto p-8 md:p-12 markdown-body serif-article ${reportFontSizeClass} book-page-shadow-right border-l border-outline-variant/10`}>
                               {reportPages[reportDisplayIndex + 1] ? (
                                 <>
-                                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: MarkdownLink }}>{preprocessMarkdown(reportPages[reportDisplayIndex + 1])}</ReactMarkdown>
+                                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={MarkdownComponents}>{preprocessMarkdown(reportPages[reportDisplayIndex + 1])}</ReactMarkdown>
                                   <div className="mt-8 text-xs opacity-50 text-center font-semibold select-none border-t border-outline-variant/10 pt-4">{reportDisplayIndex + 2} / {reportPages.length}</div>
                                 </>
                               ) : (
@@ -1813,14 +2950,20 @@ function App() {
                           )}
                           
                           {/* Navigation Buttons */}
-                          <button onClick={handleReportPrev} disabled={reportDisplayIndex === 0} className="absolute left-4 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full flex items-center justify-center bg-black/10 hover:bg-black/25 disabled:opacity-0 disabled:pointer-events-none transition-all duration-300 z-20 text-on-background shadow-md border border-white/10" title="이전 페이지 (←)"><ChevronLeft size={20} /></button>
-                          <button onClick={handleReportNext} disabled={isReportDoublePage ? reportDisplayIndex + 2 >= reportPages.length : reportDisplayIndex + 1 >= reportPages.length} className="absolute right-4 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full flex items-center justify-center bg-black/10 hover:bg-black/25 disabled:opacity-0 disabled:pointer-events-none transition-all duration-300 z-20 text-on-background shadow-md border border-white/10" title="다음 페이지 (→)"><ChevronRight size={20} /></button>
+                          <button onClick={handleReportPrev} disabled={reportDisplayIndex === 0} className="absolute left-4 top-1/2 -translate-y-1/2 booklet-nav-btn disabled:opacity-0 disabled:pointer-events-none transition-all duration-300" title="이전 페이지 (←)"><ChevronLeft size={20} /></button>
+                          <button onClick={handleReportNext} disabled={isReportDoublePage ? reportDisplayIndex + 2 >= reportPages.length : reportDisplayIndex + 1 >= reportPages.length} className="absolute right-4 top-1/2 -translate-y-1/2 booklet-nav-btn disabled:opacity-0 disabled:pointer-events-none transition-all duration-300" title="다음 페이지 (→)"><ChevronRight size={20} /></button>
                         </div>
                       ) : (
                         <div className="markdown-body text-on-background bg-surface-container-lowest p-6 rounded-2xl border border-outline-variant/20 shadow-sm max-w-4xl mx-auto w-full overflow-y-auto">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: MarkdownLink }}>
-                            {preprocessMarkdown(reportContent)}
-                          </ReactMarkdown>
+                          {reportContent ? (
+                            <ReactMarkdown remarkPlugins={[remarkGfm]} components={MarkdownComponents}>
+                              {preprocessMarkdown(reportContent)}
+                            </ReactMarkdown>
+                          ) : (
+                            <div className="flex h-32 items-center justify-center">
+                              <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
@@ -1881,265 +3024,8 @@ function App() {
         }`}
       >
         {isChatOpen ? (
-          /* Minimized Window when Open */
-          <div className="w-full h-full glass border border-primary/30 rounded-2xl shadow-2xl flex flex-col overflow-hidden relative">
-            {/* Resizing Handles */}
-            <div 
-              onMouseDown={(e) => handleResizeMouseDown(e, 'l')}
-              className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-primary/20 z-50 transition-colors"
-              title="너비 조절"
-            />
-            <div 
-              onMouseDown={(e) => handleResizeMouseDown(e, 't')}
-              className="absolute top-0 left-0 right-0 h-2 cursor-ns-resize hover:bg-primary/20 z-50 transition-colors"
-              title="높이 조절"
-            />
-            <div 
-              onMouseDown={(e) => handleResizeMouseDown(e, 'tl')}
-              className="absolute top-0 left-0 w-4 h-4 cursor-nwse-resize hover:bg-primary/30 z-[60] rounded-tl-xl transition-colors"
-              title="크기 조절"
-            />
-            {/* Header */}
-            <div 
-              onMouseDown={handleMouseDown}
-              className="p-4 bg-primary text-on-primary flex items-center justify-between cursor-move select-none"
-            >
-              <div className="flex items-center gap-2">
-                <MessageSquare className="w-5 h-5 animate-bounce" />
-                <span className="font-bold text-[14px]">Agent-Guru AI</span>
-              </div>
-              <div className="flex items-center gap-3">
-                {isGenerating && (
-                  <div className="flex items-center bg-white/10 px-2 py-0.5 rounded text-[9px] font-bold animate-pulse">
-                    ⚡ SEARCHING ACTIVE
-                  </div>
-                )}
-                <button 
-                  onClick={handleNewChat}
-                  className="opacity-75 hover:opacity-100 p-1 rounded-lg hover:bg-white/10 text-[10px] flex items-center gap-1 font-bold transition-all"
-                  title="새 대화 시작"
-                >
-                  <RefreshCw size={12} />
-                  <span>새 대화</span>
-                </button>
-                <button 
-                  onClick={() => setIsChatOpen(false)}
-                  className="opacity-70 hover:opacity-100 p-0.5 rounded-full hover:bg-white/10"
-                >
-                  <X size={16} />
-                </button>
-              </div>
-            </div>
-
-            {/* Model Mode & Modification Mode Toggle Bar */}
-            <div className="px-4 py-2 bg-surface-container border-b border-outline-variant/30 flex flex-col gap-2 text-[11px] shrink-0">
-              <div className="flex items-center justify-between">
-                <span className="font-bold text-on-surface-variant flex items-center gap-1">
-                  <Cpu size={14} className="text-primary" />
-                  리서치 모드:
-                </span>
-                <div className="flex bg-surface-container-high rounded-full p-0.5 border border-outline-variant/20">
-                  <button
-                    type="button"
-                    onClick={() => setModelMode('cloud')}
-                    className={`px-3 py-0.5 rounded-full text-[9px] font-extrabold uppercase transition-all duration-200 ${
-                      modelMode === 'cloud'
-                        ? 'bg-primary text-on-primary shadow-sm'
-                        : 'text-on-surface-variant/70 hover:bg-surface-container-highest'
-                    }`}
-                    title="Antigravity 2.0 Cloud API (Gemini Flash-Lite/Flash) 모델을 사용합니다."
-                  >
-                    Normal
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setModelMode('turbo')}
-                    className={`px-3 py-0.5 rounded-full text-[9px] font-extrabold uppercase transition-all duration-200 ${
-                      modelMode === 'turbo'
-                        ? 'bg-secondary text-on-secondary shadow-sm'
-                        : 'text-on-surface-variant/70 hover:bg-surface-container-highest'
-                    }`}
-                    title="Antigravity 2.0 Cloud API (Gemini Pro) 모델을 사용합니다."
-                  >
-                    Turbo
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setModelMode('local')}
-                    className={`px-3 py-0.5 rounded-full text-[9px] font-extrabold uppercase transition-all duration-200 ${
-                      modelMode === 'local'
-                        ? 'bg-primary text-on-primary shadow-sm'
-                        : 'text-on-surface-variant/70 hover:bg-surface-container-highest'
-                    }`}
-                    title="Local Gemma-4 모델을 사용합니다."
-                  >
-                    Turbo
-                  </button>
-                </div>
-              </div>
-              
-              <div className="flex items-center justify-between border-t border-outline-variant/10 pt-1.5">
-                <span className="font-bold text-on-surface-variant flex items-center gap-1">
-                  <span className="material-symbols-outlined text-[16px] text-amber-500">edit_note</span>
-                  보고서 수정 모드:
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setIsModificationMode(!isModificationMode)}
-                  className={`px-3 py-0.5 rounded-full text-[9px] font-extrabold uppercase transition-all duration-200 ${
-                    isModificationMode 
-                      ? 'bg-amber-600 text-white shadow-sm' 
-                      : 'bg-surface-container-high text-on-surface-variant hover:bg-surface-container-highest'
-                  }`}
-                  title="발행 전 드래프트 보고서의 수정/보완을 활성화합니다."
-                >
-                  {isModificationMode ? 'ON (수정)' : 'OFF (신규)'}
-                </button>
-              </div>
-            </div>
-
-            {/* Message Area */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-surface-container-lowest/50">
-              {chatHistory.map((msg, idx) => {
-                if (msg.type === 'search_status') {
-                  return (
-                    <div key={idx} className="flex justify-center my-2 animate-fade-in">
-                      <div className="flex items-center gap-1.5 px-3 py-1 bg-amber-500/10 border border-amber-500/20 rounded-full text-[11px] font-medium text-amber-600 dark:text-amber-400">
-                        <span className="material-symbols-outlined text-[13px]">find_in_page</span>
-                        <span>{msg.content}</span>
-                      </div>
-                    </div>
-                  );
-                }
-
-                return (
-                  <div key={idx} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
-                    <span className="text-[10px] text-outline font-bold mb-1">{msg.role === 'user' ? '사용자' : 'Agent-Guru'}</span>
-                    
-                    {/* Thoughts Timeline */}
-                    {msg.thoughts && msg.thoughts.length > 0 && (
-                      <details className="w-full max-w-[90%] bg-surface-container border border-outline-variant/30 rounded-xl p-2.5 mb-2 text-xs">
-                        <summary className="cursor-pointer text-[11px] font-bold text-primary hover:underline select-none">
-                          RAG 및 다단계 추론 스캔 ({msg.thoughts.length}단계 완료)
-                        </summary>
-                        <ul className="mt-2 space-y-1.5 border-l-2 border-primary/20 pl-3">
-                          {msg.thoughts.map((t, tIdx) => (
-                            <li key={tIdx} className="text-on-surface-variant leading-relaxed text-[11px]">
-                              {t}
-                            </li>
-                          ))}
-                        </ul>
-                      </details>
-                    )}
-
-                    <div className={`max-w-[90%] rounded-2xl leading-relaxed ${messageFontClass} ${
-                      msg.role === 'user' 
-                        ? 'bg-primary text-on-primary rounded-tr-none' 
-                        : 'bg-surface-container border border-outline-variant/30 text-on-background rounded-tl-none markdown-body'
-                    }`}>
-                      {msg.role === 'user' ? (
-                        msg.content
-                      ) : (
-                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: MarkdownLink }}>
-                          {preprocessMarkdown(msg.content)}
-                        </ReactMarkdown>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-
-              {/* Streaming Content */}
-              {isGenerating && (
-                <div className="flex flex-col items-start">
-                  <span className="text-[10px] text-outline font-bold mb-1">Agent-Guru</span>
-                  
-                  {/* Live Thought Stream */}
-                  {currentThoughts.length > 0 && (
-                    <div className="w-full max-w-[90%] bg-surface-container border border-outline-variant/30 rounded-xl p-2.5 mb-2 text-xs">
-                      <div className="flex items-center gap-1.5 text-[11px] font-bold text-primary mb-1">
-                        <RefreshCw className="animate-spin" size={12} />
-                        <span>생각하는 중...</span>
-                      </div>
-                      <ul className="space-y-1.5 border-l-2 border-primary/20 pl-3">
-                        {currentThoughts.map((t, tIdx) => (
-                          <li key={tIdx} className={`text-on-surface-variant text-[11px] ${tIdx === currentThoughts.length - 1 ? 'font-bold text-primary animate-pulse' : ''}`}>
-                            {t}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-
-                  {currentResponse && (
-                    <div className={`max-w-[90%] rounded-2xl leading-relaxed bg-surface-container border border-outline-variant/30 text-on-background rounded-tl-none markdown-body ${messageFontClass}`}>
-                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: MarkdownLink }}>
-                        {preprocessMarkdown(currentResponse)}
-                      </ReactMarkdown>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              <div ref={chatEndRef} />
-            </div>
-
-            {/* Meta Improvement Panel */}
-            {metaImprovement && (
-              <div className="p-4 bg-surface-container border-t border-outline-variant/40 text-xs">
-                <div className="flex items-center gap-1.5 font-bold text-primary mb-1">
-                  <Lightbulb size={14} className="text-amber-500" />
-                  <span>행동 가이드라인 학습 제안</span>
-                </div>
-                <p className="text-[11px] text-on-surface-variant mb-2">질문에서 감지된 아래 가이드라인을 학습하여 대화 규칙에 반영할까요?</p>
-                <div className="p-2 bg-surface-container-high rounded border border-outline-variant/20 italic mb-3">"{metaImprovement}"</div>
-                <div className="flex gap-2">
-                  <button onClick={acceptImprovement} className="flex-1 py-1.5 bg-primary text-on-primary rounded font-bold hover:opacity-90">반영 승인</button>
-                  <button onClick={() => setMetaImprovement(null)} className="flex-1 py-1.5 bg-surface-container-highest text-on-surface rounded font-bold hover:bg-surface-container-high">무시</button>
-                </div>
-              </div>
-            )}
-
-
-
-            {/* Input Footer */}
-            <form onSubmit={handleChatSubmit} className="p-3 bg-surface border-t border-outline-variant/30 flex items-end gap-2">
-              <textarea 
-                placeholder={resourceStatus.busy ? "예약작업 중으로 대화가 제한됩니다." : searchApprovalRequest ? "웹 검색 승인이 진행 중입니다..." : "질문 입력..."}
-                value={chatInput}
-                onChange={(e) => setChatInput(e.target.value)}
-                disabled={isGenerating || resourceStatus.busy || !!searchApprovalRequest}
-                rows={1}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    handleChatSubmit(e);
-                  }
-                }}
-                className={`flex-1 bg-surface-container-low border border-outline-variant/30 rounded-xl focus:outline-none focus:ring-1 focus:ring-primary resize-none overflow-y-auto ${inputFontClass}`}
-              />
-              {isGenerating ? (
-                <button 
-                  type="button" 
-                  onClick={handleStopGeneration}
-                  className={`bg-red-600 hover:bg-red-700 text-white flex items-center justify-center transition-all shrink-0 animate-pulse ${buttonSizeClass}`}
-                  title="분석 중단"
-                >
-                  <X size={16} />
-                </button>
-              ) : (
-                <button 
-                  type="submit" 
-                  disabled={!chatInput.trim() || resourceStatus.busy || !!searchApprovalRequest}
-                  className={`bg-primary text-on-primary flex items-center justify-center hover:opacity-90 disabled:opacity-50 transition-all shrink-0 ${buttonSizeClass}`}
-                >
-                  <ArrowRight size={16} />
-                </button>
-              )}
-            </form>
-          </div>
+          renderChatPanelContent(false)
         ) : (
-          /* Minimized Floating Button */
           <button 
             onMouseDown={handleMouseDown}
             onClick={() => {
@@ -2153,7 +3039,7 @@ function App() {
           </button>
         )}
       </div>
-
+      
       {/* Document Detail Popup Modal */}
       {isPopupOpen && popupDoc && (() => {
         const pages = parseMarkdownToPages(popupContent);
@@ -2185,8 +3071,17 @@ function App() {
         };
 
         return (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#191816]/75 backdrop-blur-md transition-opacity animate-in fade-in duration-200">
-            <div className={`bg-surface-container border border-outline-variant/30 rounded-2xl w-full flex flex-col shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 transition-all max-h-[85vh] h-[85vh] max-w-2xl`}>
+          <div 
+            onClick={(e) => {
+              if (e.target === e.currentTarget) {
+                setIsPopupOpen(false);
+                setPopupDoc(null);
+                setPopupContent('');
+              }
+            }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#191816]/75 backdrop-blur-md transition-opacity animate-in fade-in duration-200 cursor-pointer"
+          >
+            <div className="bg-surface-container border border-outline-variant/30 rounded-2xl w-full flex flex-col shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 transition-all max-h-[92vh] h-[92vh] max-w-[95vw] cursor-default">
               {/* Modal Header */}
               <div className="p-5 border-b border-outline-variant/30 flex items-center justify-between bg-surface-container-low shrink-0 select-none">
                 <div className="min-w-0 flex-1 pr-4">
@@ -2223,17 +3118,29 @@ function App() {
               {/* Modal Content */}
               {isBooklet ? (
                 <div className={`flex-1 flex relative overflow-hidden ${themeClass}`}>
-                  <div className={`flex-1 overflow-y-auto p-8 md:p-12 markdown-body serif-article ${fontSizeClass} ${displayIndex === 0 ? 'first-page drop-cap' : ''} book-page-shadow-left`}>
-                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: MarkdownLink }}>{preprocessMarkdown(pages[displayIndex])}</ReactMarkdown>
+                  <div className={`flex-1 overflow-y-auto p-8 md:p-12 markdown-body serif-article ${fontSizeClass} ${displayIndex === 0 && pages[displayIndex] ? 'first-page drop-cap' : ''} book-page-shadow-left`}>
+                    {pages[displayIndex] ? (
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={MarkdownComponents}>{preprocessMarkdown(pages[displayIndex])}</ReactMarkdown>
+                    ) : (
+                      <div className="flex h-full items-center justify-center">
+                        <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
+                      </div>
+                    )}
                     <div className="mt-8 text-xs opacity-50 text-center font-semibold select-none border-t border-outline-variant/10 pt-4">{displayIndex + 1} / {pages.length}</div>
                   </div>
-                  <button onClick={handlePrev} disabled={displayIndex === 0} className="absolute left-4 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full flex items-center justify-center bg-black/10 hover:bg-black/25 disabled:opacity-0 disabled:pointer-events-none transition-all duration-300 z-20 text-on-background shadow-md border border-white/10" title="이전 페이지 (←)"><ChevronLeft size={20} /></button>
-                  <button onClick={handleNext} disabled={displayIndex + 1 >= pages.length} className="absolute right-4 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full flex items-center justify-center bg-black/10 hover:bg-black/25 disabled:opacity-0 disabled:pointer-events-none transition-all duration-300 z-20 text-on-background shadow-md border border-white/10" title="다음 페이지 (→)"><ChevronRight size={20} /></button>
+                  <button onClick={handlePrev} disabled={displayIndex === 0} className="absolute left-4 top-1/2 -translate-y-1/2 booklet-nav-btn disabled:opacity-0 disabled:pointer-events-none transition-all duration-300" title="이전 페이지 (←)"><ChevronLeft size={20} /></button>
+                  <button onClick={handleNext} disabled={displayIndex + 1 >= pages.length} className="absolute right-4 top-1/2 -translate-y-1/2 booklet-nav-btn disabled:opacity-0 disabled:pointer-events-none transition-all duration-300" title="다음 페이지 (→)"><ChevronRight size={20} /></button>
                 </div>
               ) : (
                 <div className="flex-1 overflow-y-auto p-6 md:p-10 markdown-body text-on-background bg-surface-container-lowest">
-                  <div className="max-w-2xl mx-auto">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: MarkdownLink }}>{preprocessMarkdown(popupContent)}</ReactMarkdown>
+                  <div className="max-w-4xl mx-auto">
+                    {popupContent ? (
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={MarkdownComponents}>{preprocessMarkdown(popupContent)}</ReactMarkdown>
+                    ) : (
+                      <div className="flex h-32 items-center justify-center">
+                        <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -2271,6 +3178,95 @@ function App() {
                 className="px-4 py-2 text-xs font-semibold rounded-lg bg-primary text-on-primary hover:bg-primary/90 hover:shadow-lg hover:shadow-primary/20 transition-all"
               >
                 승인 (Approve)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Plan Approval Modal (Antigravity 2.0 Plan Mode) */}
+      {planApprovalRequest && (
+        <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
+          <div className="bg-surface-container border border-outline/35 rounded-2xl max-w-md w-full shadow-2xl p-6 flex flex-col gap-4 animate-in fade-in zoom-in duration-200">
+            <div className="flex items-center gap-3 text-primary text-xl font-bold">
+              <Cpu size={24} className="text-secondary animate-pulse" />
+              <span>탐색 계획 승인 요청</span>
+            </div>
+            
+            <p className="text-on-background/80 text-xs leading-relaxed">
+              사용자님의 리서치 의도를 바탕으로 에이전트가 다음과 같이 다단계 리서치 탐색 계획을 수립했습니다. 이 계획대로 진행할까요? 아니면 수정 요청 사항이 있으신가요?
+            </p>
+            
+            <div className="bg-surface-container-low border border-outline/25 p-3 rounded-lg text-xs text-on-surface-variant max-h-48 overflow-y-auto space-y-1 font-mono">
+              <strong className="text-[11px] uppercase tracking-wider text-primary block mb-1">수립된 시퀀스:</strong>
+              {planApprovalRequest.planSteps.map((step, idx) => (
+                <div key={idx} className="flex gap-2">
+                  <span className="text-primary font-bold shrink-0">{idx + 1}.</span>
+                  <span>{step}</span>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <label className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">수정 요청 사항 (선택):</label>
+              <textarea
+                id="plan-feedback-input"
+                placeholder="예: '3단계에서 최근 2분기 실적 표를 추가해줘', '국내 시장만 한정해서 스캔해줘'"
+                className="w-full text-xs p-2.5 rounded-lg border border-outline bg-surface-container-lowest text-on-surface focus:outline-none focus:border-primary/50 resize-none h-16"
+              />
+            </div>
+            
+            <div className="flex items-center justify-end gap-3 mt-2">
+              <button
+                onClick={async () => {
+                  const feedbackVal = document.getElementById('plan-feedback-input')?.value || '';
+                  if (!feedbackVal.trim()) {
+                    alert("수정 피드백 내용을 입력해 주세요.");
+                    return;
+                  }
+                  try {
+                    await fetchWithAuth('/api/chat/approve_plan', {
+                      method: 'POST',
+                      headers: { 
+                        'Content-Type': 'application/json'
+                      },
+                      body: JSON.stringify({
+                        plan_id: planApprovalRequest.planId,
+                        approved: false,
+                        feedback: feedbackVal
+                      })
+                    });
+                    setPlanApprovalRequest(null);
+                  } catch (err) {
+                    console.error('Failed to send plan feedback:', err);
+                  }
+                }}
+                className="px-4 py-2 text-xs font-semibold rounded-lg bg-surface-container-lowest border border-outline/30 hover:bg-surface-container-high text-on-background transition-all"
+              >
+                수정 요청
+              </button>
+              <button
+                onClick={async () => {
+                  try {
+                    await fetchWithAuth('/api/chat/approve_plan', {
+                      method: 'POST',
+                      headers: { 
+                        'Content-Type': 'application/json'
+                      },
+                      body: JSON.stringify({
+                        plan_id: planApprovalRequest.planId,
+                        approved: true,
+                        feedback: ''
+                      })
+                    });
+                    setPlanApprovalRequest(null);
+                  } catch (err) {
+                    console.error('Failed to approve plan:', err);
+                  }
+                }}
+                className="px-4 py-2 text-xs font-semibold rounded-lg bg-primary text-on-primary hover:bg-primary/90 hover:shadow-lg hover:shadow-primary/20 transition-all"
+              >
+                계획 확정 및 실행
               </button>
             </div>
           </div>

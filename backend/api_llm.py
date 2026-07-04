@@ -1,9 +1,15 @@
 # -*- coding: utf-8 -*-
 import os
 import sys
+from dotenv import load_dotenv
+
+# Load local environment variables from .env file
+load_dotenv()
+
 import json
 import time
 from contextlib import contextmanager
+
 
 # Import shared agent API wrapper
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -45,124 +51,89 @@ def local_model_context(model_name, ctx_size=8192):
     finally:
         log(f"Exiting cloud API context: {model_name}")
 
-def generate_chat_completion(model_name, messages, temperature=0.3, max_tokens=8192, force_local=True, model_mode="normal", **kwargs):
+def generate_chat_completion(model_name, messages, temperature=0.3, max_tokens=8192, force_local=False, model_mode="normal", **kwargs):
     """
-    Routes chat completion. If running on GCP or force_local=False, calls Google GenAI (Gemini) API.
-    Otherwise, calls local Lemonade Server on port 8000.
+    Routes chat completion directly to Google GenAI (Gemini) API.
+    Local models (Lemonade Server / Gemma) have been completely removed for cloud-native operation.
     """
-    running_on_gcp = os.getenv("RUNNING_ON_GCP", "false").lower() == "true"
+    # Cloud mode using Google GenAI SDK (Vertex AI if GCP project is set, otherwise standard API Key)
+    try:
+        from google import genai
+        from google.genai import types
+    except ImportError:
+        log("google-genai package not installed. Installing dynamically...")
+        import subprocess
+        subprocess.run([sys.executable, "-m", "pip", "install", "google-genai"], check=True)
+        from google import genai
+        from google.genai import types
+
+    project_id = get_gcp_project_id()
+    location = os.getenv("GOOGLE_CLOUD_LOCATION") or os.getenv("GCP_LOCATION") or "us-central1"
+    running_on_gcp = os.getenv("RUNNING_ON_GCP", "false").lower() == "true" or project_id is not None
     
-    if force_local and not running_on_gcp:
-        import urllib.request
-        import urllib.error
-        import json
-
-        url = "http://127.0.0.1:8000/v1/chat/completions"
-        headers = {"Content-Type": "application/json"}
-        
-        payload = {
-            "model": model_name,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "stream": False
-        }
-        
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(url, data=data, headers=headers)
-        
-        try:
-            with urllib.request.urlopen(req, timeout=120) as response:
-                res_body = response.read().decode("utf-8")
-                res_json = json.loads(res_body)
-                content = res_json["choices"][0]["message"]["content"]
-                return content
-        except Exception as e:
-            log(f"ERROR: Local model request failed: {e}. Trying cloud fallback...")
-            # Fallback to cloud if local fails
-            return generate_chat_completion(model_name, messages, temperature, max_tokens, force_local=False, model_mode=model_mode, **kwargs)
+    gemini_api_key = os.getenv("GEMINI_API_KEY")
+    
+    if gemini_api_key:
+        log("Initializing standard Gemini API client using GEMINI_API_KEY from environment")
+        client = genai.Client(api_key=gemini_api_key)
+    elif running_on_gcp:
+        log(f"Initializing Vertex AI client (Project: {project_id}, Location: {location})")
+        kwargs = {}
+        if project_id:
+            kwargs["project"] = project_id
+        client = genai.Client(vertexai=True, location=location, **kwargs)
     else:
-        # Cloud mode using Google GenAI SDK (Vertex AI if GCP project is set, otherwise standard API Key)
-        try:
-            from google import genai
-            from google.genai import types
-        except ImportError:
-            log("google-genai package not installed. Installing dynamically...")
-            import subprocess
-            subprocess.run([sys.executable, "-m", "pip", "install", "google-genai"], check=True)
-            from google import genai
-            from google.genai import types
-
-        project_id = get_gcp_project_id()
-        location = os.getenv("GOOGLE_CLOUD_LOCATION") or os.getenv("GCP_LOCATION") or "us-central1"
-        
-        # Initialize client and map models. Prioritize GEMINI_API_KEY (AI Studio) over Vertex AI.
-        if os.getenv("GEMINI_API_KEY"):
-            log("Initializing standard Gemini API client using GEMINI_API_KEY")
-            client = genai.Client()
-            if model_mode == "turbo":
-                gemini_model = "gemini-3.1-pro-preview"
-            elif model_mode == "normal":
-                gemini_model = "gemini-3.5-flash"
-            elif model_mode == "default":
-                gemini_model = "gemini-3.1-flash-lite"
-            else:
-                gemini_model = "gemini-3.5-flash"
-        elif running_on_gcp or project_id:
-            log(f"Initializing Vertex AI client (Project: {project_id}, Location: {location})")
-            kwargs = {}
-            if project_id:
-                kwargs["project"] = project_id
-            client = genai.Client(vertexai=True, location=location, **kwargs)
-            if model_mode == "turbo":
-                gemini_model = "gemini-3.1-pro-preview"
-            elif model_mode == "normal":
-                gemini_model = "gemini-3.5-flash"
-            elif model_mode == "default":
-                gemini_model = "gemini-3.1-flash-lite"
-            else:
-                gemini_model = "gemini-3.5-flash"
-        else:
-            raise ValueError(
-                "Google Cloud Project ID 또는 GEMINI_API_KEY가 감지되지 않았습니다. "
-                "Vertex AI 서비스 권한을 주거나 GEMINI_API_KEY 환경변수를 주입해야 합니다."
-            )
-            
-        log(f"Calling Cloud Gemini API - Model Mode: {model_mode} -> Target Model: {gemini_model}")
-            
-            
-        contents = []
-        for msg in messages:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            # Map role: user -> user, assistant -> model, system -> system_instruction
-            if role == "system":
-                pass
-            elif role == "assistant" or role == "model":
-                contents.append(types.Content(role="model", parts=[types.Part.from_text(text=content)]))
-            else:
-                contents.append(types.Content(role="user", parts=[types.Part.from_text(text=content)]))
-                
-        # Gather system instruction if present
-        system_instructions = [msg.get("content", "") for msg in messages if msg.get("role") == "system"]
-        sys_inst = "\n".join(system_instructions) if system_instructions else None
-        
-        config = types.GenerateContentConfig(
-            temperature=temperature,
-            max_output_tokens=max_tokens,
-            system_instruction=sys_inst
+        raise ValueError(
+            "GEMINI_API_KEY environment variable is missing. "
+            "Please create a local .env file in the project root folder with GEMINI_API_KEY=your_key, "
+            "or set it as an environment variable."
         )
+    
+    if model_mode == "turbo":
+        gemini_model = "gemini-3.1-pro-preview"
+    elif model_mode == "default":
+        gemini_model = "gemini-3.1-flash-lite"
+    else:
+        gemini_model = "gemini-3.5-flash"
         
-        try:
-            response = client.models.generate_content(
-                model=gemini_model,
-                contents=contents,
-                config=config
-            )
-            return response.text
-        except Exception as e:
-            log(f"ERROR: Cloud Gemini API request failed: {e}")
-            raise e
+    log(f"Calling Cloud Gemini API - Model Mode: {model_mode} -> Target Model: {gemini_model}")
+        
+    contents = []
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        # Map role: user -> user, assistant -> model, system -> system_instruction
+        if role == "system":
+            pass
+        elif role == "assistant" or role == "model":
+            contents.append(types.Content(role="model", parts=[types.Part.from_text(text=content)]))
+        else:
+            contents.append(types.Content(role="user", parts=[types.Part.from_text(text=content)]))
+            
+    # Gather system instruction if present
+    system_instructions = [msg.get("content", "") for msg in messages if msg.get("role") == "system"]
+    sys_inst = "\n".join(system_instructions) if system_instructions else None
+    
+    # Enable Google Search grounding
+    tools = [{"google_search": {}}]
+        
+    config = types.GenerateContentConfig(
+        temperature=temperature,
+        max_output_tokens=max_tokens,
+        system_instruction=sys_inst,
+        tools=tools
+    )
+    
+    try:
+        response = client.models.generate_content(
+            model=gemini_model,
+            contents=contents,
+            config=config
+        )
+        return response.text
+    except Exception as e:
+        log(f"ERROR: Cloud Gemini API request failed: {e}")
+        raise e
 
 if __name__ == "__main__":
     # Test block

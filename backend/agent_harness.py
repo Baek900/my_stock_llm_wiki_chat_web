@@ -20,6 +20,7 @@ import api_llm
 import search_engine
 import web_searcher
 import resource_checker
+import database
 
 MODEL_NAME = "Gemma-4-26B-A4B-it-GGUF"
 AGENTS_RULE_FILE = os.path.join(VAULT_DIR, ".agents", "AGENTS.md")
@@ -552,7 +553,7 @@ def get_latest_industry_report():
     except Exception:
         return ""
 
-async def generate_guru_portfolio_loop(query, guru_names, model_mode="cloud", draft_path=None, is_modification_mode=False, chat_history=None):
+async def generate_guru_portfolio_loop(query, guru_names, model_mode="cloud", draft_path=None, is_modification_mode=False, chat_history=None, session_id=None):
     if isinstance(guru_names, str):
         guru_names = [guru_names]
         
@@ -707,11 +708,6 @@ async def generate_guru_portfolio_loop(query, guru_names, model_mode="cloud", dr
         prompt += f"\n\n[사용자 지정 추가 규칙]\n{custom_rules}"
 
     try:
-        load_success = await asyncio.to_thread(api_llm.load_model, MODEL_NAME)
-        if not load_success:
-            yield sse_yield({"type": "status", "status": "error", "message": "로컬 모델 구동에 실패했습니다. 서버 상태를 점검해 주세요."})
-            return
-            
         messages = [{"role": "system", "content": prompt}]
         if chat_history:
             for msg in chat_history[-5:]:
@@ -736,6 +732,11 @@ async def generate_guru_portfolio_loop(query, guru_names, model_mode="cloud", dr
         saved_path, report_title = await save_report_to_wiki(query, full_response, local_refs, web_refs, draft_path, model_mode=model_mode)
         if saved_path:
             yield sse_yield({"type": "report_path", "path": saved_path, "title": report_title})
+            if session_id:
+                try:
+                    database.update_research_session_draft(session_id, saved_path)
+                except Exception as ex:
+                    print(f"[ERROR-DB] Failed to save draft path to session: {ex}")
             
         append_to_interaction_history(query, full_response)
         
@@ -749,17 +750,69 @@ async def generate_guru_portfolio_loop(query, guru_names, model_mode="cloud", dr
             yield sse_yield({"type": "content", "text": chunk})
             time.sleep(0.01)
             
+        # Save assistant summary to SQLite
+        if session_id:
+            try:
+                database.save_research_message(session_id, "assistant", chat_summary)
+            except Exception:
+                pass
+                
     finally:
-        try:
-            api_llm.unload_model(MODEL_NAME)
-        except Exception:
-            pass
+        pass
 
-async def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_history=None, is_modification_mode=False, approved_searches=None):
+async def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_history=None, is_modification_mode=False, approved_searches=None, session_id=None, chat_type=None):
     """
     Generator implementing the Fable-5 Agentic Harness loop.
     Yields JSON events for SSE stream.
     """
+    # 1. Special branch for Floating Icon Chat (Concise RAG / Web Search via 3.1 Flash Lite)
+    if chat_type == "floating":
+        yield sse_yield({"type": "thought", "text": "플로팅 아이콘 모드: 지식 RAG 및 웹 검색 결과 기반 답변을 준비 중입니다..."})
+        
+        # Local RAG search to pull documents
+        matched_docs_info = []
+        try:
+            local_results = await asyncio.to_thread(search_engine.search_local_vault, query, limit=3)
+            matched_docs_info = local_results if local_results else []
+        except Exception as e:
+            log(f"Local RAG Search failed: {e}")
+            
+        collected_context = []
+        for r in matched_docs_info:
+            collected_context.append(f"## 문서: {r['title']} (카테고리: {r['folder']})\n{r['snippet']}")
+            
+        context_text = "\n\n".join(collected_context) if collected_context else "관련 로컬 지식 문서가 없습니다."
+        
+        system_instruction = f"""
+        당신은 글로벌 투자 리서치 비서 Agent-Guru입니다.
+        아래 제공된 [로컬 컨텍스트 정보]를 핵심 참고 자료로 사용하고 필요시 실시간 구글 검색(Google Search)을 참고하여 사용자의 질문에 한국어로 친절하고 간결하게 답변해 주세요.
+        
+        [로컬 컨텍스트 정보]
+        {context_text}
+        """
+        
+        messages = [
+            {"role": "system", "content": system_instruction}
+        ]
+        if chat_history:
+            for msg in chat_history[-5:]:
+                messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
+        messages.append({"role": "user", "content": query})
+        
+        full_response = ""
+        async for chunk_type, chunk_text in generate_streaming_completion(messages, model_mode=model_mode):
+            if chunk_text and chunk_type == "content":
+                full_response += chunk_text
+                yield sse_yield({"type": "content", "text": chunk_text})
+                
+        # Save assistant summary to SQLite
+        if session_id:
+            try:
+                database.save_research_message(session_id, "assistant", full_response)
+            except Exception:
+                pass
+        return
+
     # Check resources using resource checker
     if resource_checker.check_resource_busy():
         yield sse_yield({
@@ -885,7 +938,7 @@ async def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_h
                 matched_gurus.append(guru_name)
                 
         if matched_gurus:
-            async for event in generate_guru_portfolio_loop(query, matched_gurus, model_mode, draft_path, is_modification_mode=is_modification_mode, chat_history=chat_history):
+            async for event in generate_guru_portfolio_loop(query, matched_gurus, model_mode, draft_path, is_modification_mode=is_modification_mode, chat_history=chat_history, session_id=session_id):
                 yield event
             return
         elif len(query.strip()) < 8:
@@ -904,11 +957,7 @@ async def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_h
         yield sse_yield({"type": "thought", "text": "로컬 LLM 서버에 연결하고 컨텍스트 메모리를 준비하고 있습니다..."})
     
     try:
-        if not is_cloud:
-            load_success = await asyncio.to_thread(api_llm.load_model, MODEL_NAME)
-            if not load_success:
-                yield sse_yield({"type": "status", "status": "error", "message": "로컬 모델 구동에 실패했습니다. 서버 상태를 점검해 주세요."})
-                return
+        pass
             
         # Step 1: Multi-Stage Planning & Local search (RAG)
         yield sse_yield({"type": "thought", "text": "1단계: 질문을 분석하고 의도 파악 및 다단계 지식 탐색 계획을 수립하고 있습니다..."})
@@ -1006,151 +1055,8 @@ async def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_h
                 else:
                     log(f"Local match '{best_res['title']}' rejected as high quality (score={max_score}, is_error={is_error_content}, too_short={is_too_short}, term_in_body={term_in_body})")
             
-            if has_high_quality_match:
-                queries_with_local_matches.append((q, local_results))
-            else:
-                queries_needing_web_search.append(q)
-                
-        # 2) Fallback to External Flashlight Search for missing queries
-        # Cap to max web searches
-        queries_to_search = queries_needing_web_search[:max_web_searches]
-        
-        if queries_to_search:
-            combined_q = ", ".join(queries_to_search)
-            request_id, approved_event, approval_events = prepare_search_approval(combined_q)
-            for ev in approval_events:
-                yield ev
-                
-            # Wait for user approval/rejection (suspended generator)
-            await approved_event.wait()
+            queries_with_local_matches.append((q, local_results))
             
-            approval_data = active_search_approvals.pop(request_id, {})
-            approved = approval_data.get("approved", False)
-            
-            if approved:
-                yield sse_yield({"type": "thought", "text": f"✅ 웹 검색 승인됨. {len(queries_to_search)}개 키워드에 대한 DuckDuckGo 실시간 병렬 검색을 수행합니다."})
-                
-                # Fetch web search results in parallel
-                web_search_tasks = [asyncio.to_thread(web_searcher.search_web, q, limit=5) for q in queries_to_search]
-                web_search_results = await asyncio.gather(*web_search_tasks)
-                
-                # Generate new Wiki contents concurrently
-                wiki_tasks = []
-                for s_idx, q in enumerate(queries_to_search):
-                    web_results = web_search_results[s_idx]
-                    if not web_results:
-                        continue
-                        
-                    for r in web_results:
-                        web_refs.append((r['title'], r['url']))
-                        
-                    flashlight_result = "\n\n".join([f"Title: {r['title']}\nURL: {r['url']}\nSnippet: {r['snippet']}" for r in web_results])
-                    
-                    wiki_prompt = f"""
-                    웹 검색 결과를 바탕으로, 이 정보를 Obsidian 지식 위키에 저장할 수 있도록 표준 형식의 마크다운 위키 페이지를 작성해 주세요.
-                    반드시 아래 YAML frontmatter 형식을 첫머리에 포함해야 하며, 텍스트 설명 외의 사설은 생략하세요.
-                    
-                    [카테고리 분류 규칙]
-                    frontmatter의 category 필드에는 다음 6개 공식 카테고리 중 하나만 지정하십시오:
-                    - Macroeconomics
-                    - Institutions
-                    - People
-                    - Tech Themes
-                    - Industries
-                    - Segments
-
-                    [신뢰도 태깅 규칙 (Andrej Karpathy llm-wiki)]
-                    본문 설명 내에 팩트나 수치가 서술될 때, 사실의 끝부분에 출처의 확실성에 맞춰 다음 신뢰도 태그 중 하나를 의무적으로 붙이십시오:
-                    - `[EXTRACTED]`: 원문 검색 결과에 직접적으로 명시된 확실한 사실
-                    - `[INFERRED]`: 논리적으로 추론된 유도된 사실
-                    - `[AMBIGUOUS]`: 원문의 서술이 모호하거나 충돌하는 모호한 내용
-                    - `[UNVERIFIED]`: 확인되지 않은 소문, 루머 또는 추정치
-                    예시: "엔비디아의 2026년 가동률은 98%에 달할 것으로 예상된다.[UNVERIFIED]"
-
-                    [웹 검색 자료]
-                    {flashlight_result}
-                    
-                    출력 형식 예시:
-                    ---
-                    type: knowledge-term
-                    category: Tech Themes
-                    related_terms:
-                      - "[[관련개념1]]"
-                    tags:
-                      - knowledge/definition
-                      - concept/{q}
-                    ---
-                    # [{q}]
-                    
-                    ## 정의
-                    ...
-                    
-                    ## 주요 내용
-                    ...
-                    """
-                    wiki_tasks.append((q, query_local_model_sync(wiki_prompt, temperature=0.2, model_mode=model_mode)))
-                
-                if wiki_tasks:
-                    yield sse_yield({"type": "thought", "text": f"웹 RAG 정보 수집 완료. {len(wiki_tasks)}개 지식 위키 문서 자동 작성을 병렬로 시작합니다..."})
-                    
-                    task_queries = [t[0] for t in wiki_tasks]
-                    task_coros = [t[1] for t in wiki_tasks]
-                    wiki_contents = await asyncio.gather(*task_coros)
-                    
-                    # Save all generated documents
-                    for s_idx, wiki_content in enumerate(wiki_contents):
-                        q = task_queries[s_idx]
-                        title_match = re.search(r'^#\s+(.*)$', wiki_content, re.MULTILINE)
-                        concept_title = title_match.group(1).strip() if title_match else q
-                        concept_title = re.sub(r'[\\/*?:"<>|]', '', concept_title)
-                        
-                        # Extract category from YAML frontmatter
-                        category_val = "Macroeconomics"
-                        cat_match = re.search(r'^category:\s*(.*)$', wiki_content, re.MULTILINE)
-                        if cat_match:
-                            category_val = cat_match.group(1).strip()
-
-                        # Determine category subfolder
-                        subfolder = "macro"
-                        cat_lower = category_val.lower()
-                        if "macro" in cat_lower or "economy" in cat_lower or "market" in cat_lower or "금융" in cat_lower or "금리" in cat_lower:
-                            subfolder = "macro"
-                        elif "people" in cat_lower or "person" in cat_lower or "인물" in cat_lower or "창립자" in cat_lower:
-                            subfolder = "people"
-                        elif "institution" in cat_lower or "company" in cat_lower or "기관" in cat_lower or "기업" in cat_lower or "org" in cat_lower:
-                            subfolder = "institutions"
-                        elif "tech" in cat_lower or "ai" in cat_lower or "기술" in cat_lower or "theme" in cat_lower or "과학" in cat_lower:
-                            subfolder = "tech_themes"
-                        elif "industry" in cat_lower or "산업" in cat_lower or "섹터" in cat_lower:
-                            subfolder = "industries"
-                        elif "segment" in cat_lower or "분야" in cat_lower or "부문" in cat_lower:
-                            subfolder = "segments"
-                        
-                        wiki_path = os.path.join(VAULT_DIR, "knowledge", subfolder, f"{concept_title}.md")
-                        try:
-                            os.makedirs(os.path.dirname(wiki_path), exist_ok=True)
-                            with open(wiki_path, "w", encoding="utf-8") as f:
-                                f.write(wiki_content)
-                            yield sse_yield({
-                                "type": "thought", 
-                                "text": f"새로운 위키 문서 생성 완료: [knowledge/{subfolder}/{concept_title}.md](file:///{wiki_path.replace(chr(92), '/')})"
-                            })
-                        except Exception as ex:
-                            yield sse_yield({"type": "thought", "text": f"위키 문서 저장 실패: {ex}"})
-                            
-                    # Force cache reload ONCE in a batch
-                    yield sse_yield({"type": "thought", "text": f"새로 저장된 {len(wiki_contents)}개 위키 지식들에 대해 데이터베이스를 일괄 업데이트(배치 리로드)하고 있습니다..."})
-                    await asyncio.to_thread(search_engine.update_document_cache, force=True)
-                    
-                    # Re-run local search for these queries to gather the newly created documents
-                    post_search_tasks = [asyncio.to_thread(search_engine.search_local_vault, q, limit=3) for q in queries_to_search]
-                    post_search_results = await asyncio.gather(*post_search_tasks)
-                    
-                    for s_idx, q in enumerate(queries_to_search):
-                        queries_with_local_matches.append((q, post_search_results[s_idx]))
-            else:
-                yield sse_yield({"type": "thought", "text": "❌ 외부 검색 거부됨. 기존 지식만으로 답변을 합성합니다."})
-                
         # 3) Process and collect search results in the original queries order
         query_to_results = {q: res for q, res in queries_with_local_matches}
         for q in queries:
@@ -1267,6 +1173,11 @@ async def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_h
         saved_path, report_title = await save_report_to_wiki(query, full_response, local_refs, web_refs, draft_path, model_mode=model_mode)
         if saved_path:
             yield sse_yield({"type": "report_path", "path": saved_path, "title": report_title})
+            if session_id:
+                try:
+                    database.update_research_session_draft(session_id, saved_path)
+                except Exception as ex:
+                    print(f"[ERROR-DB] Failed to save draft path to session: {ex}")
             
         append_to_interaction_history(query, full_response)
         
@@ -1278,8 +1189,13 @@ async def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_h
         for i in range(0, len(chat_summary), chunk_size):
             chunk = chat_summary[i:i+chunk_size]
             yield sse_yield({"type": "content", "text": chunk})
-            time.sleep(0.01)
-            
+        # Save assistant summary to SQLite
+        if session_id:
+            try:
+                database.save_research_message(session_id, "assistant", chat_summary)
+            except Exception:
+                pass
+                
         # Step 7: Critique detection (Meta-Self-Improvement)
         yield sse_yield({"type": "thought", "text": "7단계: 사용자의 지적 사항이나 교정 요구가 있었는지 자율 검사 중..."})
         critique_prompt = f"""
@@ -1305,45 +1221,16 @@ async def generate_agent_loop(query, model_mode="cloud", draft_path=None, chat_h
             })
             
     finally:
-        if not is_cloud:
-            try:
-                await asyncio.to_thread(api_llm.unload_model, MODEL_NAME)
-            except Exception:
-                pass
+        pass
 
 
-async def generate_streaming_completion(messages, temperature=0.3, max_tokens=8192, model_mode="local"):
+async def generate_streaming_completion(messages, temperature=0.3, max_tokens=8192, model_mode="normal"):
     """
-    Tries Cloud API first (if model_mode in ['normal', 'turbo', 'cloud']), and falls back to local Lemonade Server on failure.
-    If model_mode == 'local', calls local model directly.
+    Calls Cloud Gemini API directly via api_llm.
+    Local models and fallback to Lemonade Server have been completely removed.
     """
-    is_cloud = (model_mode in ["cloud", "turbo", "normal"])
-    if not is_cloud:
-        log("Forcing direct local model completion...")
-        try:
-            res = await asyncio.to_thread(
-                api_llm.generate_chat_completion,
-                MODEL_NAME,
-                messages,
-                temperature=temperature,
-                force_local=True,
-                model_mode=model_mode
-            )
-            if res:
-                chunk_size = 50
-                for i in range(0, len(res), chunk_size):
-                    yield "content", res[i:i+chunk_size]
-                    await asyncio.sleep(0.01)
-            else:
-                yield "content", "[로컬 모델 응답 오류: 응답이 비어 있음]"
-        except Exception as e:
-            yield "content", f"[로컬 모델 실행 에러: {e}]"
-        return
-
-    # Cloud/Turbo mode: try Cloud first
-    target_model = "gemini-3.1-pro" if model_mode == "turbo" else "gemini-3.5-flash"
+    log(f"Streaming: calling Cloud Gemini API with model_mode={model_mode}...")
     try:
-        log(f"Streaming: calling Cloud Gemini API with model_mode={model_mode}...")
         res = await asyncio.to_thread(
             api_llm.generate_chat_completion,
             MODEL_NAME,
@@ -1359,51 +1246,7 @@ async def generate_streaming_completion(messages, temperature=0.3, max_tokens=81
                 await asyncio.sleep(0.01)
             return
         else:
-            raise Exception("Cloud API response is empty")
+            raise Exception("클라우드 API의 응답이 비어 있습니다.")
     except Exception as e:
-        log(f"Cloud API failed or timed out: {e}. Falling back to Local Lemonade Server (Port 8000) as last resort...")
-        
-        # Fallback to local model (direct HTTP POST to lemonade)
-        payload = {
-            "model": MODEL_NAME,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "stream": True
-        }
-        
-        def call_lemonade_endpoint():
-            import urllib.request
-            data = json.dumps(payload).encode('utf-8')
-            req = urllib.request.Request(
-                "http://localhost:8000/v1/chat/completions",
-                data=data,
-                headers={"Content-Type": "application/json"}
-            )
-            try:
-                response = urllib.request.urlopen(req, timeout=10)
-                return response.read().decode('utf-8', errors='ignore')
-            except Exception as e:
-                return f"Error: {e}"
-                
-        try:
-            # We run this sync web request in thread pool
-            response_text = await asyncio.to_thread(call_lemonade_endpoint)
-            if response_text.startswith("Error"):
-                raise Exception(response_text)
-                
-            # Parse lemonade server SSE chunks (line by line)
-            for line in response_text.splitlines():
-                if line.startswith("data: "):
-                    data_content = line[6:].strip()
-                    if data_content == "[DONE]":
-                        break
-                    try:
-                        chunk_json = json.loads(data_content)
-                        delta = chunk_json['choices'][0]['delta']
-                        if 'content' in delta and delta['content'] is not None:
-                            yield "content", delta['content']
-                    except Exception:
-                        pass
-        except Exception as ex:
-            yield "content", f"\n[최후수단 로컬 모델 호출 실패: {ex}]"
+        log(f"Cloud Gemini API invocation failed: {e}")
+        yield "content", f"\n[클라우드 API 호출 에러: {e}]"

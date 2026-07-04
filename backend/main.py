@@ -1,8 +1,14 @@
 # -*- coding: utf-8 -*-
 import os
 import sys
+from dotenv import load_dotenv
+
+# Load local environment variables from .env file
+load_dotenv()
+
 import json
 import urllib.parse
+import asyncio
 from fastapi import FastAPI, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -18,6 +24,8 @@ sys.path.append(BACKEND_DIR)
 import search_engine
 import agent_harness
 import resource_checker
+import database
+import time
 
 
 # Passcode Auth config
@@ -68,6 +76,17 @@ class QueryModel(BaseModel):
     is_modification_mode: Optional[bool] = False
     chat_history: Optional[List] = []
     approved_searches: Optional[List[str]] = None
+    session_id: Optional[str] = None
+    chat_type: Optional[str] = "research"
+
+class CreateSessionModel(BaseModel):
+    title: str
+    model_mode: Optional[str] = "normal"
+
+class PlanApprovalModel(BaseModel):
+    plan_id: str
+    approved: bool
+    feedback: Optional[str] = None
 
 class ImproveModel(BaseModel):
     rule: str
@@ -122,13 +141,13 @@ def get_resource_status(current_user: str = Depends(verify_auth_token)):
     }
 
 @app.get("/api/documents")
-def list_documents(query: str = "", current_user: str = Depends(verify_auth_token)):
+def list_documents(query: str = "", fast: bool = False, current_user: str = Depends(verify_auth_token)):
     """
     Lists and searches documents across the entire vault.
     If query is empty, lists all documents.
     """
     if query:
-        results = search_engine.search_local_vault(query, limit=50)
+        results = search_engine.search_local_vault(query, limit=50, fast=fast)
         return results
     else:
         all_docs = search_engine.get_all_cached_documents()
@@ -146,15 +165,46 @@ def list_documents(query: str = "", current_user: str = Depends(verify_auth_toke
             })
         return results
 
+@app.post("/api/documents/refresh")
+def refresh_documents_cache(current_user: str = Depends(verify_auth_token)):
+    """
+    Forces a rebuild of the document cache by walking the GCS mounted vault.
+    """
+    try:
+        search_engine.update_document_cache(force=True)
+        return {
+            "status": "success",
+            "message": f"성공적으로 GCP 버킷과 동기화되었습니다. (총 {len(search_engine.doc_cache)}개 문서)"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"동기화 실패: {str(e)}")
+
 @app.get("/api/documents/detail")
 def get_document_detail(path: str, current_user: str = Depends(verify_auth_token)):
     """
     Retrieves the raw markdown content of any document in the vault by its path.
     """
+    # Normalize Windows paths or mismatched local prefix paths to the current server's VAULT_DIR
+    normalized_path = path.replace("\\", "/")
+    local_prefixes = [
+        "G:/내 드라이브/agent-guru/agent-guru",
+        "G:/내 드라이브/agent-guru",
+        "G:/내 드라이브",
+        "C:/Users/qorrb/OneDrive/Desktop/git hub/my_stock_llm_wiki_chat/vault",
+        "C:/Users/qorrb/OneDrive/Desktop/git hub/my_stock_llm_wiki_chat_web/vault",
+        "C:/Users/qorrb/agent-guru-web"
+    ]
+    
+    for prefix in local_prefixes:
+        if normalized_path.startswith(prefix):
+            rel = normalized_path[len(prefix):].lstrip("/")
+            path = os.path.join(VAULT_DIR, rel)
+            break
+            
     # Safe validation to prevent directory traversal outside vault or C: drive workspace
     abs_path = os.path.abspath(path)
     is_in_vault = abs_path.startswith(os.path.abspath(VAULT_DIR))
-    is_in_web = abs_path.startswith(os.path.abspath("C:\\Users\\qorrb\\agent-guru-web"))
+    is_in_web = abs_path.startswith(os.path.abspath("C:\\Users\\qorrb\\agent-guru-web")) or abs_path.startswith(os.path.abspath("/app"))
     
     if not (is_in_vault or is_in_web):
         raise HTTPException(status_code=403, detail="Access denied. Path is outside allowed directories.")
@@ -173,33 +223,129 @@ def get_document_detail(path: str, current_user: str = Depends(verify_auth_token
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to read file: {e}")
 
+# Active streams tracker to support background-persistence and re-connecting client streams
+active_streams = {}
+active_streams_lock = asyncio.Lock()
+
+class ActiveStream:
+    def __init__(self, session_id, generator_coro):
+        self.session_id = session_id
+        self.generator_coro = generator_coro
+        self.history = []  # List of chunks yielded so far
+        self.queues = set()  # Set of active client queues
+        self.task = asyncio.create_task(self._run())
+        self.done = False
+
+    async def _run(self):
+        try:
+            async for chunk in self.generator_coro:
+                self.history.append(chunk)
+                # Distribute to all active client queues
+                for q in list(self.queues):
+                    await q.put(chunk)
+        except Exception as e:
+            print(f"[STREAM-RUN-ERROR] Error in {self.session_id}: {e}")
+            err_chunk = f"data: {{\"type\": \"error\", \"text\": \"Generation error: {str(e)}\"}}\n\n"
+            self.history.append(err_chunk)
+            for q in list(self.queues):
+                await q.put(err_chunk)
+        finally:
+            self.done = True
+            for q in list(self.queues):
+                await q.put(None)  # Sentinel to close client connection
+            # Clean up global map
+            async with active_streams_lock:
+                if self.session_id in active_streams:
+                    del active_streams[self.session_id]
+
+    async def subscribe(self):
+        q = asyncio.Queue()
+        # Replay history first
+        for chunk in self.history:
+            await q.put(chunk)
+        if self.done:
+            await q.put(None)
+        else:
+            self.queues.add(q)
+        return q
+
+    def unsubscribe(self, q):
+        self.queues.discard(q)
+
+async def stream_reader(session_id, q, stream_obj):
+    try:
+        while True:
+            chunk = await q.get()
+            if chunk is None:
+                break
+            yield chunk
+    finally:
+        if stream_obj:
+            stream_obj.unsubscribe(q)
+
 @app.post("/api/chat")
 async def chat_endpoint(payload: QueryModel, current_user: str = Depends(verify_auth_token)):
     """
     SSE Streaming endpoint triggering the Fable-5 Agentic Harness loop.
+    Supports multi-session background execution and stream re-connection.
     """
     query = payload.query
     model_mode = payload.model_mode
     draft_path = payload.draft_path
     is_modification_mode = payload.is_modification_mode
     chat_history = payload.chat_history
+    session_id = payload.session_id
+    chat_type = payload.chat_type
     
     # Debug print to trace payload structure
     import sys
-    print(f"[DEBUG-PAYLOAD] Received Chat request - Query: '{query}', Mode: '{model_mode}', History count: {len(chat_history) if chat_history else 0}")
-    print(f"[DEBUG-PAYLOAD] Chat History Detail: {chat_history}")
+    print(f"[DEBUG-PAYLOAD] Received Chat request - Query: '{query}', Mode: '{model_mode}', History count: {len(chat_history) if chat_history else 0}, Session: '{session_id}', ChatType: '{chat_type}'")
     sys.stdout.flush()
     
-    # Since agent_harness.generate_agent_loop is an async generator, we pass it directly to StreamingResponse
+    # Save the user's query as a user message in SQLite if session_id is provided
+    if session_id:
+        try:
+            database.save_research_message(session_id, "user", query)
+        except Exception as e:
+            print(f"[ERROR-DB] Failed to save user message: {e}")
+            
+    # For general/non-session chats (e.g. floating RAG chat), stream directly
+    if not session_id:
+        return StreamingResponse(
+            agent_harness.generate_agent_loop(
+                query, 
+                model_mode=model_mode, 
+                draft_path=draft_path, 
+                chat_history=chat_history,
+                is_modification_mode=is_modification_mode,
+                approved_searches=payload.approved_searches,
+                session_id=session_id,
+                chat_type=chat_type
+            ),
+        )
+        
+    # Multi-session background-resilient streaming
+    async with active_streams_lock:
+        if session_id in active_streams:
+            stream = active_streams[session_id]
+        else:
+            generator_coro = agent_harness.generate_agent_loop(
+                query, 
+                model_mode=model_mode, 
+                draft_path=draft_path, 
+                chat_history=chat_history,
+                is_modification_mode=is_modification_mode,
+                approved_searches=payload.approved_searches,
+                session_id=session_id,
+                chat_type=chat_type
+            )
+            stream = ActiveStream(session_id, generator_coro)
+            active_streams[session_id] = stream
+
+    q = await stream.subscribe()
     return StreamingResponse(
-        agent_harness.generate_agent_loop(
-            query, 
-            model_mode=model_mode, 
-            draft_path=draft_path, 
-            chat_history=chat_history,
-            is_modification_mode=is_modification_mode,
-            approved_searches=payload.approved_searches
-        ), 
+        stream_reader(session_id, q, stream),
+        media_type="text/event-stream"
     )
 
 class SearchApprovalModel(BaseModel):
@@ -292,6 +438,13 @@ def publish_document(payload: PublishModel, current_user: str = Depends(verify_a
         # Force cache reload so search engine registers it
         search_engine.update_document_cache(force=True)
         
+        # Clear active_draft_path in database for any session that matches this draft_path
+        try:
+            database.clear_session_draft_by_path(abs_draft)
+            database.clear_session_draft_by_path(draft_path)
+        except Exception as ex:
+            print(f"[ERROR-DB] Failed to clear session draft path: {ex}")
+        
         return {
             "status": "success",
             "message": f"성공적으로 위키에 발행되었습니다: [[{dest_title}]]",
@@ -333,6 +486,65 @@ def improve_endpoint(payload: ImproveModel, current_user: str = Depends(verify_a
         return {"status": "success", "message": f"규칙이 시스템 가이드라인에 추가되었습니다: '{rule}'"}
     else:
         raise HTTPException(status_code=500, detail="시스템 규칙 추가 실패")
+
+
+# --- Research Session Management Endpoints ---
+
+@app.get("/api/research/sessions")
+def list_research_sessions(current_user: str = Depends(verify_auth_token)):
+    """
+    Returns list of all research sessions, indicating if each is actively generating in background.
+    """
+    sessions = database.get_research_sessions()
+    for s in sessions:
+        s["generating"] = s.get("id") in active_streams
+    return sessions
+
+@app.post("/api/research/sessions")
+def add_research_session(payload: CreateSessionModel, current_user: str = Depends(verify_auth_token)):
+    """
+    Creates a new research session.
+    """
+    import uuid
+    session_id = f"sess_{int(time.time())}_{uuid.uuid4().hex[:6]}"
+    try:
+        return database.create_research_session(session_id, payload.title, payload.model_mode)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/research/sessions/{session_id}")
+def remove_research_session(session_id: str, current_user: str = Depends(verify_auth_token)):
+    """
+    Deletes a session and its message history.
+    """
+    success = database.delete_research_session(session_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="세션을 찾을 수 없거나 삭제할 수 없습니다.")
+    return {"status": "success", "message": "세션이 삭제되었습니다."}
+
+@app.get("/api/research/sessions/{session_id}/messages")
+def list_research_messages(session_id: str, current_user: str = Depends(verify_auth_token)):
+    """
+    Returns all messages for a specific session.
+    """
+    return database.get_research_messages(session_id)
+
+@app.post("/api/chat/approve_plan")
+async def approve_plan(payload: PlanApprovalModel, current_user: str = Depends(verify_auth_token)):
+    """
+    Approves or provides feedback for a research plan.
+    """
+    plan_id = payload.plan_id
+    approved = payload.approved
+    feedback = payload.feedback
+    
+    if plan_id in agent_harness.active_plan_approvals:
+        agent_harness.active_plan_approvals[plan_id]["approved"] = approved
+        agent_harness.active_plan_approvals[plan_id]["feedback"] = feedback
+        agent_harness.active_plan_approvals[plan_id]["event"].set()
+        return {"status": "success", "message": "피드백이 에이전트 하네스에 성공적으로 반영되었습니다."}
+    else:
+        raise HTTPException(status_code=404, detail="만료되었거나 유효하지 않은 계획 식별자입니다.")
 
 
 # Mount React frontend static files for deployment (if they exist)

@@ -3,13 +3,12 @@ import os
 import sqlite3
 from datetime import datetime
 
-# Retrieve VAULT_DIR from env or fallback to local path
-VAULT_DIR = os.environ.get("VAULT_DIR", "G:\\내 드라이브\\agent-guru\\agent-guru")
-
-# Setup unsynced local database directory to prevent Google Drive / OneDrive sync lock issues
+# Setup database directory
 if os.environ.get("CONTAINER_MODE") == "docker" or os.environ.get("VAULT_DIR") == "/vault":
     DB_PATH = "/data/stock_wiki.db"
 else:
+    # Setup unsynced local database directory to prevent Google Drive / OneDrive sync lock issues on Windows,
+    # and to run on local ephemeral SSD in GCP Cloud Run (avoiding GCSFuse SQLite disk I/O locking errors).
     user_home = os.path.expanduser("~")
     DB_DIR = os.path.join(user_home, ".my_stock_llm_wiki_chat")
     os.makedirs(DB_DIR, exist_ok=True)
@@ -79,6 +78,40 @@ def initialize_database():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             rule TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # 4. Research Sessions Table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS research_sessions (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            model_mode TEXT DEFAULT 'normal',
+            active_draft_path TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    # Dynamically alter table to add active_draft_path if updating an existing database
+    try:
+        cursor.execute("ALTER TABLE research_sessions ADD COLUMN active_draft_path TEXT")
+        conn.commit()
+        print("[DATABASE] Added active_draft_path column to research_sessions.")
+    except Exception:
+        # Column already exists
+        pass
+
+    # 5. Research Messages Table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS research_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            thoughts TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (session_id) REFERENCES research_sessions(id) ON DELETE CASCADE
         )
     """)
     
@@ -163,6 +196,116 @@ def get_all_custom_rules():
         cursor.execute("SELECT rule FROM custom_rules ORDER BY created_at DESC")
         rows = cursor.fetchall()
         return [row["rule"] for row in rows]
+    finally:
+        conn.close()
+
+# --- Research Session Helper Functions ---
+
+def get_research_sessions():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT * FROM research_sessions ORDER BY updated_at DESC")
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+def create_research_session(session_id, title, model_mode="normal"):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        cursor.execute("""
+            INSERT INTO research_sessions (id, title, model_mode, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+        """, (session_id, title, model_mode, now, now))
+        conn.commit()
+        return {"id": session_id, "title": title, "model_mode": model_mode}
+    except Exception as e:
+        conn.rollback()
+        print(f"[DATABASE-ERROR] Failed to create session {session_id}: {e}")
+        raise e
+    finally:
+        conn.close()
+
+def delete_research_session(session_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM research_sessions WHERE id = ?", (session_id,))
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        print(f"[DATABASE-ERROR] Failed to delete session {session_id}: {e}")
+        return False
+    finally:
+        conn.close()
+
+def get_research_messages(session_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT * FROM research_messages WHERE session_id = ? ORDER BY id ASC", (session_id,))
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+def save_research_message(session_id, role, content, thoughts=None):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        cursor.execute("""
+            INSERT INTO research_messages (session_id, role, content, thoughts)
+            VALUES (?, ?, ?, ?)
+        """, (session_id, role, content, thoughts))
+        
+        # Update updated_at of the session
+        cursor.execute("""
+            UPDATE research_sessions SET updated_at = ? WHERE id = ?
+        """, (now, session_id))
+        
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        print(f"[DATABASE-ERROR] Failed to save research message for session {session_id}: {e}")
+        return False
+    finally:
+        conn.close()
+
+def update_research_session_draft(session_id, draft_path):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            UPDATE research_sessions SET active_draft_path = ? WHERE id = ?
+        """, (draft_path, session_id))
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        print(f"[DATABASE-ERROR] Failed to update draft path for session {session_id}: {e}")
+        return False
+    finally:
+        conn.close()
+
+def clear_session_draft_by_path(draft_path):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            UPDATE research_sessions SET active_draft_path = NULL WHERE active_draft_path = ?
+        """, (draft_path,))
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        print(f"[DATABASE-ERROR] Failed to clear draft path {draft_path}: {e}")
+        return False
     finally:
         conn.close()
 

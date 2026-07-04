@@ -1,6 +1,6 @@
 @echo off
 title Agent-Guru Frontend Server (Port 5173)
-cd /d "C:\Users\qorrb\OneDrive\Desktop\git hub\my_stock_llm_wiki_chat\frontend"
+cd /d "C:\Users\qorrb\OneDrive\Desktop\git hub\my_stock_llm_wiki_chat_web\frontend"
 :loop
 echo [%time%] Starting Frontend Server...
 npm run dev

@@ -25,19 +25,15 @@ def spawn_wmi_process(cmd_line, cwd):
         print(f"[ERROR] Detached launch failed: {res.stdout.strip()} Stderr: {res.stderr.strip()}", file=sys.stderr)
 
 if __name__ == "__main__":
-    base_dir = r"C:\Users\qorrb\OneDrive\Desktop\git hub\my_stock_llm_wiki_chat"
+    base_dir = r"C:\Users\qorrb\OneDrive\Desktop\git hub\my_stock_llm_wiki_chat_web"
+    venv_dir = r"C:\Users\qorrb\OneDrive\Desktop\git hub\my_stock_llm_wiki_chat"
     
-    # 1. Spawn Lemonade Server
-    lemonade_exe = r"C:\Users\qorrb\AppData\Local\lemonade_server\bin\LemonadeServer.exe"
-    lemonade_dir = r"C:\Users\qorrb\AppData\Local\lemonade_server\bin"
-    spawn_wmi_process(lemonade_exe, lemonade_dir)
-    
-    # 2. Spawn Backend (FastAPI)
-    backend_cmd = 'cmd.exe /c ""' + base_dir + '\\.venv\\Scripts\\python.exe" -m uvicorn main:app --host 127.0.0.1 --port 8080 --reload > "' + base_dir + '\\backend_stdout.log" 2> "' + base_dir + '\\backend_stderr.log""'
+    # 1. Spawn Backend (FastAPI)
+    backend_cmd = 'cmd.exe /c ""' + venv_dir + '\\.venv\\Scripts\\python.exe" -m uvicorn main:app --host 127.0.0.1 --port 8080 --reload > "' + base_dir + '\\backend_stdout.log" 2> "' + base_dir + '\\backend_stderr.log""'
     backend_dir = os.path.join(base_dir, "backend")
     spawn_wmi_process(backend_cmd, backend_dir)
     
-    # 3. Spawn Frontend (Vite) with CI=true to prevent TTY interactive shell crash
+    # 2. Spawn Frontend (Vite) with CI=true to prevent TTY interactive shell crash
     frontend_cmd = 'cmd.exe /c "set CI=true && \"C:\\Program Files\\nodejs\\npm.cmd\" run dev"'
     frontend_dir = os.path.join(base_dir, "frontend")
     spawn_wmi_process(frontend_cmd, frontend_dir)

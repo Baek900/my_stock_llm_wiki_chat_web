@@ -33,3 +33,9 @@ frontend/.vite/
 chroma_db/
 db_cache/
 
+# Local Environment Variables
+.env
+.env.local
+.env.*.local
+
+

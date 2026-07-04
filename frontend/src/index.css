@@ -312,67 +312,244 @@ header input {
 /* Booklet Specific Typography & Layout */
 .serif-article {
   font-family: var(--serif);
-  line-height: 1.8;
-  font-size: 15.5px;
+  line-height: 1.65;
+  word-break: keep-all;
+  overflow-wrap: break-word;
+}
+
+.serif-article.text-sm { font-size: 12.5px !important; }
+.serif-article.text-base { font-size: 14.5px !important; }
+.serif-article.text-lg { font-size: 17.5px !important; }
+.serif-article.text-xl { font-size: 21.0px !important; }
+
+.booklet-nav-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 9999px;
+  transition: all 0.2s ease-in-out;
+  z-index: 30;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+.theme-paper-white .booklet-nav-btn,
+.theme-paper-sepia .booklet-nav-btn {
+  background-color: rgba(255, 255, 255, 0.75) !important;
+  border: 1px solid rgba(0, 0, 0, 0.08) !important;
+  color: #1a1a1a !important;
+}
+
+.theme-paper-white .booklet-nav-btn:hover,
+.theme-paper-sepia .booklet-nav-btn:hover {
+  background-color: rgba(255, 255, 255, 0.95) !important;
+  transform: translateY(-50%) scale(1.08) !important;
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.2);
+}
+
+.theme-paper-dark .booklet-nav-btn {
+  background-color: rgba(45, 40, 36, 0.85) !important;
+  border: 1px solid rgba(225, 215, 190, 0.3) !important;
+  color: #e5dec9 !important;
+}
+
+.theme-paper-dark .booklet-nav-btn:hover {
+  background-color: rgba(60, 54, 48, 0.95) !important;
+  transform: translateY(-50%) scale(1.08) !important;
+  border-color: rgba(225, 215, 190, 0.5) !important;
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.35);
 }
 
 .serif-article p {
-  margin-bottom: 1.5em;
+  line-height: 1.85 !important;
   text-align: justify;
+  text-justify: inter-word;
+  margin-bottom: 1.25em;
+  word-break: keep-all;
+  overflow-wrap: break-word;
 }
 
-/* First-letter Drop Cap */
-.drop-cap p:first-of-type::first-letter, .drop-cap::first-letter {
-  font-size: 3.5em;
+.serif-article h1 {
+  font-family: var(--serif);
   font-weight: 700;
-  float: left;
-  line-height: 0.85;
-  margin-right: 10px;
+  text-align: center;
+  font-size: 1.8em;
+  margin-top: 1.6em;
+  margin-bottom: 1em;
+  letter-spacing: -0.02em;
+  border-bottom: none !important;
   color: var(--color-primary);
 }
 
-/* Spine Shadow for Book View */
+.serif-article h2 {
+  font-family: var(--serif);
+  font-weight: 600;
+  font-size: 1.35em;
+  margin-top: 1.8em;
+  margin-bottom: 0.8em;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  padding-bottom: 0.3em;
+}
+
+.dark .serif-article h2 {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.serif-article h3 {
+  font-family: var(--serif);
+  font-weight: 600;
+  font-size: 1.15em;
+  margin-top: 1.4em;
+  margin-bottom: 0.6em;
+}
+
+.serif-article h1,
+.serif-article h2,
+.serif-article h3,
+.serif-article h4,
+.serif-article h5,
+.serif-article h6 {
+  word-break: keep-all;
+  overflow-wrap: break-word;
+}
+
+/* Compact Table Overrides for Booklet Visibility & Contrast */
+.serif-article table {
+  width: 100% !important;
+  border-collapse: collapse !important;
+  margin: 0.8em 0 !important;
+  font-size: 0.82em !important;
+  border: 1px solid rgba(0, 0, 0, 0.15) !important;
+}
+
+.theme-paper-dark .serif-article table {
+  border: 1px solid rgba(255, 255, 255, 0.15) !important;
+}
+
+.serif-article th, .serif-article td {
+  padding: 6px 10px !important;
+  line-height: 1.4 !important;
+  text-align: left !important;
+}
+
+/* Force white text for high contrast on dark headers */
+.theme-paper-sepia .serif-article th {
+  background-color: #cc5a44 !important;
+  color: #ffffff !important;
+  border: 1px solid rgba(67, 52, 34, 0.3) !important;
+}
+
+.theme-paper-white .serif-article th {
+  background-color: #cc5a44 !important;
+  color: #ffffff !important;
+  border: 1px solid rgba(0, 0, 0, 0.15) !important;
+}
+
+.theme-paper-dark .serif-article th {
+  background-color: #cc5a44 !important;
+  color: #ffffff !important;
+  border: 1px solid rgba(255, 255, 255, 0.15) !important;
+}
+
+/* Body text inside cells */
+.theme-paper-sepia .serif-article td {
+  border: 1px solid rgba(67, 52, 34, 0.15) !important;
+  color: #433422 !important;
+}
+
+.theme-paper-white .serif-article td {
+  border: 1px solid rgba(0, 0, 0, 0.1) !important;
+  color: #191919 !important;
+}
+
+.theme-paper-dark .serif-article td {
+  border: 1px solid rgba(229, 222, 201, 0.15) !important;
+  color: #e5dec9 !important;
+}
+
+/* Zebra striping */
+.theme-paper-sepia .serif-article tr:nth-child(even) {
+  background-color: rgba(67, 52, 34, 0.04) !important;
+}
+.theme-paper-white .serif-article tr:nth-child(even) {
+  background-color: rgba(0, 0, 0, 0.02) !important;
+}
+.theme-paper-dark .serif-article tr:nth-child(even) {
+  background-color: rgba(255, 255, 255, 0.04) !important;
+}
+
+/* First-letter Drop Cap (Disabled as requested to keep the style modern and clean) */
+
+/* Spine Shadow for Book View (Clean Flat Divider Line for E-Reader) */
 .book-spine {
   position: absolute;
   top: 0;
   bottom: 0;
   left: 50%;
-  width: 2px;
+  width: 1px;
   transform: translateX(-50%);
-  background: rgba(0, 0, 0, 0.05);
-  box-shadow: 0 0 12px 6px rgba(0, 0, 0, 0.08);
+  background-color: rgba(0, 0, 0, 0.08) !important;
   z-index: 10;
   pointer-events: none;
 }
 .dark .book-spine {
-  background: rgba(0, 0, 0, 0.15);
-  box-shadow: 0 0 12px 6px rgba(0, 0, 0, 0.25);
+  background-color: rgba(255, 255, 255, 0.08) !important;
 }
 
 .book-page-shadow-left {
-  box-shadow: inset -15px 0 20px -10px rgba(0, 0, 0, 0.04);
+  box-shadow: none !important;
 }
 .dark .book-page-shadow-left {
-  box-shadow: inset -15px 0 20px -10px rgba(0, 0, 0, 0.2);
+  box-shadow: none !important;
 }
 
 .book-page-shadow-right {
-  box-shadow: inset 15px 0 20px -10px rgba(0, 0, 0, 0.04);
+  box-shadow: none !important;
 }
 .dark .book-page-shadow-right {
-  box-shadow: inset 15px 0 20px -10px rgba(0, 0, 0, 0.2);
+  box-shadow: none !important;
 }
 
-/* Custom Paper Color Options for Booklet */
+/* Custom Paper Color Options for E-Reader (Flat Clean Cards like Millie's Library) */
 .theme-paper-sepia {
-  background-color: #f3ece0 !important;
-  color: #433422 !important;
+  background-color: #f7f1e5 !important; /* Softer, flat Millie cream */
+  color: #2e261f !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.03) !important;
+  border: 1px solid rgba(0, 0, 0, 0.05) !important;
 }
 .theme-paper-white {
-  background-color: #faf9f6 !important;
+  background-color: #fafaf9 !important; /* Flat pure paper white */
   color: #1a1a1a !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.03) !important;
+  border: 1px solid rgba(0, 0, 0, 0.05) !important;
 }
 .theme-paper-dark {
-  background-color: #1e1b18 !important;
-  color: #e5dec9 !important;
+  background-color: #1c1a18 !important; /* Flat dark charcoal */
+  color: #cec7b9 !important;
+  box-shadow: 0 4px 30px rgba(0, 0, 0, 0.15) !important;
+  border: 1px solid rgba(255, 255, 255, 0.05) !important;
 }
+
+/* Page Turn Animation (Subtle soft crossfade transition) */
+.serif-article {
+  animation: pageFade 0.25s ease-out;
+}
+@keyframes pageFade {
+  from {
+    opacity: 0.8;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Optimize scroll performance and behavior */
+.overflow-y-auto, .overflow-y-scroll {
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+  will-change: scroll-position;
+}
+
